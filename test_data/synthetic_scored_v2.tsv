@@ -1,5 +1,0 @@
-contig	start	stop	target	context	overflow	orientation	Doench2014OnTarget	DoenchCFD_maxOT	DoenchCFD_specificityscore	dangerous_GC	dangerous_polyT	dangerous_in_genome	Hsu2013	Moreno-Mateos2015OnTarget	JostCRISPRi_maxOT	JostCRISPRi_specificityscore	basesDiffToClosestHit	closestHitCount	0-1-2-3-4_mismatch	FreeEnergy20	otCount
-region_1__chr10:102599604-102600204	96	119	ACGTACGTACGTACGTACGNGG	NONE	OK	FWD	0.5	0.4	0.85	NONE	NONE	NONE	72.0	0.3	0.2	0.9	3	5	0,0,0,5,0	-1.0	5
-region_1__chr10:102599604-102600204	496	519	TTTTGGGGCCCCAAAATTTNGG	NONE	OK	FWD	0.2	0.6	0.40	NONE	PolyT	NONE	55.0	0.2	0.5	0.4	2	8	0,0,0,8,0	0.0	8
-region_2__chr10:119250462-119251062	238	261	GGGGGACGTACGTACGTACNGG	NONE	OK	REV	0.1	0.8	0.10	NONE	NONE	NONE	20.0	0.1	0.7	0.15	1	20	0,0,1,19,0	0.0	20
-snp_1__chr10:102599750-102600050	140	163	ACGTACGTACGTACGTACGNGG	NONE	OK	FWD	0.5	0.4	0.85	NONE	NONE	NONE	72.0	0.3	0.2	0.9	3	5	0,0,0,5,0	-1.0	5
