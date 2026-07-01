@@ -58,6 +58,8 @@ if [[ -f "$ENV_FILE" ]]; then
     # shellcheck disable=SC1090
     source "$ENV_FILE"
 fi
+# Default checkpoints to the ones bundled in this repo, if not overridden.
+: "${LAUNCH_CKPT_DIR:=${SCRIPT_DIR}/checkpoints/}"
 
 # ── Other defaults ──────────────────────────────────────────────────────
 OUTDIR="${SCRIPT_DIR}/results"
