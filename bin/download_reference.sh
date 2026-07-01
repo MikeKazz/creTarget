@@ -1,30 +1,38 @@
 #!/bin/bash
 # download_reference.sh
 #
-# Downloads and prepares the hg38 reference FASTA (bgzipped, main
-# chromosomes only, no alt scaffolds, no chrM) and the matching FlashFry
-# SpCas9 NGG off-target index from Zenodo (DOI 10.5281/zenodo.21114489),
-# verifies checksums, decompresses, and builds the .fai/.gzi indices
-# needed by bedtools/samtools.
+# Downloads and prepares the hg38 reference FASTA and the matching FlashFry
+# SpCas9 NGG off-target index from Zenodo (DOI 10.5281/zenodo.21115562),
+# verifies checksums, decompresses, and builds the .fai index needed by
+# bedtools/samtools.
+#
+# NOTE: the FASTA is downloaded bgzipped (smaller transfer) but then
+# decompressed to plain .fa -- some bedtools builds segfault on bgzipped
+# FASTA input, so plain-text is used for actual pipeline runs.
+#
+# NOTE: hg38_standard_cas9ngg_db is a single FILE (not a directory) with a
+# required sibling hg38_standard_cas9ngg_db.header file alongside it -- both
+# are packaged together in the tarball.
 #
 # Usage:
 #   ./bin/download_reference.sh --outdir ~/.guidenet_reference
 #
 # After this completes, point local_paths.env at:
-#   FASTA=<outdir>/hg38.fa.gz
+#   FASTA=<outdir>/hg38.fa
 #   FLASHFRY_DB=<outdir>/hg38_standard_cas9ngg_db
 #
-# Requires on PATH: curl or wget, sha256sum, tar, bgzip (from htslib/samtools).
+# Requires on PATH: curl or wget, sha256sum, tar, bgzip + samtools (htslib).
 
 set -euo pipefail
 
-ZENODO_RECORD_ID="21114489"
+ZENODO_RECORD_ID="21115562"
 BASE_URL="https://zenodo.org/records/${ZENODO_RECORD_ID}/files"
 
 FASTA_GZ="hg38.fa.gz"
 FASTA_SHA="hg38.fa.gz.sha256"
 DB_TAR="hg38_standard_cas9ngg_db.tar.gz"
 DB_SHA="hg38_standard_cas9ngg_db.tar.gz.sha256"
+DB_FILE="hg38_standard_cas9ngg_db"
 
 OUTDIR="${HOME}/.guidenet_reference"
 SKIP_EXISTING=1
@@ -88,26 +96,36 @@ verify "${DB_TAR}" "${DB_SHA}"
 
 echo "=== Preparing files ===" >&2
 
-if [[ ! -f "${FASTA_GZ}.fai" || ! -f "${FASTA_GZ}.gzi" || "$SKIP_EXISTING" -eq 0 ]]; then
-    echo "  -> building .fai/.gzi index for ${FASTA_GZ} (samtools faidx)" >&2
-    if ! command -v samtools >/dev/null 2>&1; then
-        echo "ERROR: samtools not found on PATH -- required to index the bgzipped FASTA" >&2
+if [[ ! -f "hg38.fa" || ! -f "hg38.fa.fai" || "$SKIP_EXISTING" -eq 0 ]]; then
+    echo "  -> decompressing ${FASTA_GZ} to plain hg38.fa (bedtools compatibility)" >&2
+    if ! command -v bgzip >/dev/null 2>&1; then
+        echo "ERROR: bgzip not found on PATH -- required to decompress the FASTA" >&2
         exit 1
     fi
-    samtools faidx "${FASTA_GZ}"
+    bgzip -d -k -f "${FASTA_GZ}"
+    echo "  -> building .fai index for hg38.fa (samtools faidx)" >&2
+    if ! command -v samtools >/dev/null 2>&1; then
+        echo "ERROR: samtools not found on PATH -- required to index the FASTA" >&2
+        exit 1
+    fi
+    samtools faidx hg38.fa
 else
-    echo "  -> ${FASTA_GZ}.fai/.gzi already present, skipping" >&2
+    echo "  -> hg38.fa/.fai already present, skipping" >&2
 fi
 
-DB_DIR_NAME="hg38_standard_cas9ngg_db"
-if [[ ! -d "${DB_DIR_NAME}" || "$SKIP_EXISTING" -eq 0 ]]; then
+if [[ ! -f "${DB_FILE}" || ! -f "${DB_FILE}.header" || "$SKIP_EXISTING" -eq 0 ]]; then
     echo "  -> extracting ${DB_TAR}" >&2
     tar xzf "${DB_TAR}"
 else
-    echo "  -> ${DB_DIR_NAME}/ already present, skipping extraction" >&2
+    echo "  -> ${DB_FILE} + ${DB_FILE}.header already present, skipping extraction" >&2
+fi
+
+if [[ ! -f "${DB_FILE}" || ! -f "${DB_FILE}.header" ]]; then
+    echo "ERROR: expected both ${DB_FILE} and ${DB_FILE}.header after extraction -- something's wrong with the tarball" >&2
+    exit 1
 fi
 
 echo "" >&2
 echo "Done. Set these in local_paths.env:" >&2
-echo "  FASTA=${OUTDIR}/${FASTA_GZ}" >&2
-echo "  FLASHFRY_DB=${OUTDIR}/${DB_DIR_NAME}" >&2
+echo "  FASTA=${OUTDIR}/hg38.fa" >&2
+echo "  FLASHFRY_DB=${OUTDIR}/${DB_FILE}" >&2
