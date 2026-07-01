@@ -1,0 +1,4 @@
+region_id	target	spacer	launch_dCas9_enhancer	launch_dCas9_promoter	dangerous_GC	dangerous_polyT	dangerous_in_genome	overflow	JostCRISPRi_specificityscore	Hsu2013	DoenchCFD_specificityscore	basesDiffToClosestHit	seed_score	in_genome_count	fail_seed_score	fail_dangerous_GC	fail_dangerous_polyT	fail_multisite_genomic_match	fail_overflow	exclude_reason	passes_hard_filters	composite_score	composite_score_max_possible	rank
+region_1	ACAATGCACATAGCCCTTGCTGG	ACAATGCACATAGCCCTTGC	0.91	0.15	NONE	NONE	IN_GENOME=1	OK	0.9	90.0	0.8	3	0	1	False	False	False	False	False		True	0.784	0.88	1
+region_1	GTTAATATTCACGGTCTGCTGGG	GTTAATATTCACGGTCTGCT	0.42	0.65	NONE	NONE	IN_GENOME=1	OK	0.9	90.0	0.8	3	1	1	False	False	False	False	False		True	0.637	0.88	2
+region_2	ACAATGCACATAGCCCTTGCTGG	ACAATGCACATAGCCCTTGC	0.91	0.15	NONE	NONE	IN_GENOME=1	OK	0.9	90.0	0.8	3	0	1	False	False	False	False	False		True	0.784	0.88	1

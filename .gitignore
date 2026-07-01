@@ -1,0 +1,11 @@
+local_paths.env
+results/
+test_data/prep_out*
+test_data/standalone_out
+test_data/launch_split_test
+test_data/fake_enh
+test_data/fake_pro
+*.fai
+*.log
+work/
+.nextflow*
