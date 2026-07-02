@@ -9,3 +9,13 @@ test_data/fake_pro
 *.log
 work/
 .nextflow*
+
+# Python packaging build artifacts
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+chunked_test_out/

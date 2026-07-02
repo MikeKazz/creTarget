@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crispri-guide-designer"
+version = "0.1.0"
+description = "Design and rank CRISPRi guide RNAs for SNP/point or enhancer/interval target regions (hg38)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "pandas>=1.5",
+    "psutil>=5.9",  # used to auto-size parallel workers by available RAM; optional-ish, falls back to /proc/meminfo
+    "tomli>=2.0; python_version < '3.11'",  # tomllib is stdlib only from 3.11+
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+crispri-guide-designer = "crispri_guide_designer.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"crispri_guide_designer.scripts" = ["*.py"]
