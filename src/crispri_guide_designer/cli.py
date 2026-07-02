@@ -241,7 +241,7 @@ def cmd_run(args):
         venv_python = cfg.require(conf, "launch_dcas9", "venv_python")
         launch_script = cfg.require(conf, "launch_dcas9", "script")
         ckpt_dir = conf.get("launch_dcas9", {}).get("ckpt_dir") or str(
-            files("crispri_guide_designer").joinpath("..", "..", "checkpoints"))
+            files("crispri_guide_designer").joinpath("..", "..", "checkpoints")) + "/"
 
         launch_dir = outdir / "launch_dcas9"
         chunk_dir = launch_dir / "chunks"
