@@ -59,6 +59,7 @@ if [[ -f "$ENV_FILE" ]]; then
     source "$ENV_FILE"
 fi
 # Default checkpoints to the ones bundled in this repo, if not overridden.
+# Resolved relative to THIS SCRIPT'S location (not cwd), same as everything else.
 : "${LAUNCH_CKPT_DIR:=${SCRIPT_DIR}/checkpoints/}"
 
 # ── Other defaults ──────────────────────────────────────────────────────
@@ -67,6 +68,7 @@ FLANK_BP=50
 SNP_WINDOW_BP=150
 BLAST_RADIUS_BP=1000
 DEDUP_FLAG=""
+ATAC_NARROWPEAK=""
 MAX_MISMATCH=3
 SNP_BED=""
 ENHANCER_BED=""
@@ -88,6 +90,7 @@ while [[ $# -gt 0 ]]; do
         --snp_window_bp) SNP_WINDOW_BP="$2"; shift 2 ;;
         --blast_radius_bp) BLAST_RADIUS_BP="$2"; shift 2 ;;
         --dedup_blast_radius) DEDUP_FLAG="--dedup_blast_radius"; shift ;;
+        --atac_narrowpeak) ATAC_NARROWPEAK="$2"; shift 2 ;;
         --max_mismatch) MAX_MISMATCH="$2"; shift 2 ;;
         --scoring_metrics) SCORING_METRICS="$2"; shift 2 ;;
         --run_launch_dcas9) RUN_LAUNCH_DCAS9=1; shift ;;
@@ -208,10 +211,15 @@ java -Xmx7g -jar "${FLASHFRY_JAR}" \
     --maxMismatch "${MAX_MISMATCH}"
 
 echo "=== [4/${TOTAL_STEPS}] Annotating (merge + distance/blast-radius flagging) ===" >&2
+ATAC_ARGS=()
+if [[ -n "$ATAC_NARROWPEAK" ]]; then
+    ATAC_ARGS=(--atac_narrowpeak "$ATAC_NARROWPEAK")
+fi
 python3 "${BIN_DIR}/annotate.py" \
     --scored_chunks "${OUTDIR}/scored.output" \
     --region_metadata "${OUTDIR}/regions.combined.metadata.tsv" \
     --blast_radius_bp "${BLAST_RADIUS_BP}" \
+    "${ATAC_ARGS[@]}" \
     --out "${OUTDIR}/guides.annotated.tsv"
 
 ANNOTATED_FOR_RANK="${OUTDIR}/guides.annotated.tsv"

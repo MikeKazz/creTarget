@@ -72,6 +72,7 @@ def cmd_configure(args):
     print("Edit it directly, or set individual values with:")
     print("  crispri-guide-designer configure --set reference.fasta=/path/to/hg38.fa")
     if args.set:
+        import tomllib  # noqa
         # Minimal manual TOML patch (avoid adding a write-capable TOML dep):
         # read as text, replace matching `key = ` lines under the right section.
         text = path.read_text()
@@ -227,12 +228,15 @@ def cmd_run(args):
 
     # ---- 3. Annotate ----
     annotated = outdir / "guides.annotated.tsv"
-    _run_py_script("annotate.py", [
+    annotate_args = [
         "--scored_chunks", *scored_chunks,
         "--region_metadata", str(combined_meta),
         "--blast_radius_bp", str(args.blast_radius_bp),
         "--out", str(annotated),
-    ])
+    ]
+    if args.atac_narrowpeak:
+        annotate_args += ["--atac_narrowpeak", args.atac_narrowpeak]
+    _run_py_script("annotate.py", annotate_args)
 
     annotated_for_rank = annotated
 
@@ -241,7 +245,7 @@ def cmd_run(args):
         venv_python = cfg.require(conf, "launch_dcas9", "venv_python")
         launch_script = cfg.require(conf, "launch_dcas9", "script")
         ckpt_dir = conf.get("launch_dcas9", {}).get("ckpt_dir") or str(
-            files("crispri_guide_designer").joinpath("..", "..", "checkpoints")) + "/"
+            files("crispri_guide_designer").joinpath("..", "..", "checkpoints"))
 
         launch_dir = outdir / "launch_dcas9"
         chunk_dir = launch_dir / "chunks"
@@ -301,6 +305,9 @@ def main():
     p_run.add_argument("--snp-bed", dest="snp_bed")
     p_run.add_argument("--enhancer-bed", dest="enhancer_bed")
     p_run.add_argument("--dedup-blast-radius", dest="dedup_blast_radius", action="store_true")
+    p_run.add_argument("--atac-narrowpeak", dest="atac_narrowpeak", default=None,
+                        help="optional ENCODE-standard 10-column narrowPeak file (single cell type); "
+                             "adds distance_to_atac_summit column, informational only (not used in ranking yet)")
     p_run.add_argument("--blast-radius-bp", dest="blast_radius_bp", type=int, default=1000)
     p_run.add_argument("--flank-bp", dest="flank_bp", type=int, default=50)
     p_run.add_argument("--snp-window-bp", dest="snp_window_bp", type=int, default=150)

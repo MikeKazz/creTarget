@@ -39,11 +39,60 @@ def parse_contig(contig):
         return None, None, None, None
 
 
+def load_atac_summits(narrowpeak_path):
+    """Parses an ENCODE-standard 10-column narrowPeak file into a dict of
+    {chrom: sorted numpy array of absolute summit positions}, for fast
+    nearest-neighbor distance lookup via bisect/searchsorted.
+
+    narrowPeak columns: chrom, start, end, name, score, strand, signalValue,
+    pValue, qValue, peak (summit offset from start; -1 if no summit called,
+    in which case we fall back to the peak's midpoint).
+    """
+    import numpy as np
+
+    cols = ["chrom", "start", "end", "name", "score", "strand",
+            "signalValue", "pValue", "qValue", "peak"]
+    df = pd.read_csv(narrowpeak_path, sep="\t", header=None, names=cols)
+
+    summit = df["start"] + df["peak"]
+    no_summit = df["peak"] < 0
+    summit[no_summit] = (df["start"] + df["end"]) // 2
+
+    summits_by_chrom = {}
+    for chrom, group in summit.groupby(df["chrom"]):
+        summits_by_chrom[chrom] = np.sort(group.to_numpy())
+
+    n_peaks = len(df)
+    print(f"Loaded {n_peaks} ATAC peaks across {len(summits_by_chrom)} chromosome(s) from {narrowpeak_path}", file=sys.stderr)
+    return summits_by_chrom
+
+
+def nearest_summit_distance(chrom, midpoint, summits_by_chrom):
+    """Distance (bp) from `midpoint` to the nearest summit on `chrom`, via
+    binary search. Returns NaN if chrom has no peaks."""
+    import numpy as np
+
+    summits = summits_by_chrom.get(chrom)
+    if summits is None or len(summits) == 0:
+        return float("nan")
+    idx = np.searchsorted(summits, midpoint)
+    candidates = []
+    if idx < len(summits):
+        candidates.append(abs(summits[idx] - midpoint))
+    if idx > 0:
+        candidates.append(abs(summits[idx - 1] - midpoint))
+    return min(candidates)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--scored_chunks", nargs="+", required=True)
     ap.add_argument("--region_metadata", required=True)
     ap.add_argument("--blast_radius_bp", type=int, default=1000)
+    ap.add_argument("--atac_narrowpeak", default=None,
+                     help="optional ENCODE-standard 10-column narrowPeak file; adds a "
+                          "distance_to_atac_summit column (bp, guide midpoint to nearest "
+                          "peak summit). Not currently used in ranking -- informational only.")
     ap.add_argument("--out", default="guides.annotated.tsv")
     args = ap.parse_args()
 
@@ -89,6 +138,19 @@ def main():
     guide_mid = (merged["genome_start"] + merged["genome_end"]) / 2
     merged["distance_to_target"] = (guide_mid - merged["target_ref"]).abs()
     merged["within_blast_radius"] = merged["distance_to_target"] <= args.blast_radius_bp
+
+    if args.atac_narrowpeak:
+        summits_by_chrom = load_atac_summits(args.atac_narrowpeak)
+        chrom_col = "genome_chrom"
+        merged["distance_to_atac_summit"] = [
+            nearest_summit_distance(chrom, mid, summits_by_chrom)
+            for chrom, mid in zip(merged[chrom_col], guide_mid)
+        ]
+        n_no_peak_chrom = merged["distance_to_atac_summit"].isna().sum()
+        if n_no_peak_chrom:
+            print(f"WARNING: {n_no_peak_chrom} guides on chromosomes with no ATAC peaks -- distance_to_atac_summit is NaN for those", file=sys.stderr)
+    else:
+        merged["distance_to_atac_summit"] = float("nan")
 
     merged.to_csv(args.out, sep="\t", index=False)
     print(f"Wrote {len(merged)} annotated guides -> {args.out}", file=sys.stderr)
