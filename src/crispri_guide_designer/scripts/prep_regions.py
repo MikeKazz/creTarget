@@ -29,22 +29,68 @@ Requires: bedtools (getfasta) on PATH, and a faidx-indexed reference (.fai).
 
 import argparse
 import csv
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 
-def read_bed(bed_path, prefix):
+RANGE_RE = re.compile(r'^(\S+):(\d+)-(\d+)$')
+POINT_RE = re.compile(r'^(\S+):(\d+)$')
+
+
+def read_bed(bed_path, prefix, input_type):
+    """Parses target regions, auto-detecting format per line:
+      - tab-separated: legacy true BED (chrom, start, end[, name]), 0-based half-open
+      - "chr:start-end" (enhancer files only): treated identically to BED start/end,
+        no offset conversion
+      - "chr:pos" (snp files only), 1-based: converted to BED as start=pos-1, end=pos
+    Malformed/unparseable lines are skipped with a warning, not fatal.
+    """
     regions = []
+    n_skipped = 0
     with open(bed_path) as fh:
-        for i, line in enumerate(fh):
-            line = line.strip()
+        for i, raw in enumerate(fh):
+            line = raw.rstrip("\n").strip()
             if not line or line.startswith(("#", "track", "browser")):
                 continue
-            fields = line.split("\t")
-            chrom, start, end = fields[0], int(fields[1]), int(fields[2])
-            name = fields[3] if len(fields) > 3 and fields[3] else f"{prefix}_{i+1}"
+
+            if "\t" in raw:
+                fields = raw.rstrip("\n").split("\t")
+                try:
+                    chrom, start, end = fields[0], int(fields[1]), int(fields[2])
+                except (ValueError, IndexError):
+                    print(f"WARNING: skipping malformed BED line {i+1} in {bed_path}: {line!r}", file=sys.stderr)
+                    n_skipped += 1
+                    continue
+                name = fields[3] if len(fields) > 3 and fields[3] else f"{prefix}_{i+1}"
+            else:
+                m_range = RANGE_RE.match(line)
+                m_point = POINT_RE.match(line)
+                if input_type == "enhancer" and m_range:
+                    chrom, start, end = m_range.group(1), int(m_range.group(2)), int(m_range.group(3))
+                    name = line
+                elif input_type == "snp" and m_point:
+                    chrom, pos = m_point.group(1), int(m_point.group(2))
+                    start, end = pos - 1, pos  # 1-based point -> 0-based half-open BED
+                    name = line
+                elif input_type == "enhancer" and m_point:
+                    print(f"WARNING: skipping line {i+1} in {bed_path} -- looks like a SNP (chr:pos) in an enhancer file, expected chr:start-end: {line!r}", file=sys.stderr)
+                    n_skipped += 1
+                    continue
+                elif input_type == "snp" and m_range:
+                    print(f"WARNING: skipping line {i+1} in {bed_path} -- looks like an interval (chr:start-end) in a SNP file, expected chr:pos: {line!r}", file=sys.stderr)
+                    n_skipped += 1
+                    continue
+                else:
+                    print(f"WARNING: skipping unparseable line {i+1} in {bed_path}: {line!r}", file=sys.stderr)
+                    n_skipped += 1
+                    continue
+
             regions.append({"chrom": chrom, "start": start, "end": end, "name": name})
+
+    if n_skipped:
+        print(f"WARNING: skipped {n_skipped} malformed/unparseable line(s) total in {bed_path}", file=sys.stderr)
     return regions
 
 
@@ -113,7 +159,7 @@ def main():
         sys.exit(f"ERROR: expected FASTA index at {fai_path} (run `samtools faidx {args.fasta}` first)")
 
     chrom_sizes = load_chrom_sizes(fai_path)
-    regions = read_bed(args.bed, prefix=args.input_type)
+    regions = read_bed(args.bed, prefix=args.input_type, input_type=args.input_type)
     if not regions:
         sys.exit("ERROR: no regions parsed from BED file")
 

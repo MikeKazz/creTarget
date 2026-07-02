@@ -19,3 +19,7 @@ dist/
 .venv/
 venv/
 chunked_test_out/
+results_large_v2/
+results_launch_test/
+results_launch_test2/
+results_pip_test/
