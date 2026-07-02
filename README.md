@@ -1,152 +1,163 @@
 # crispri-guide-designer
 
-Design and rank CRISPRi guide RNAs for SNP/point or enhancer/interval target
-regions (hg38), using FlashFry for guide discovery and off-target/on-target
-scoring.
+Design, score, and rank CRISPRi guide RNAs for noncoding target regions
+(SNPs/points or enhancers/intervals) in hg38 — fast, at scale (validated at
+~464,000 guides in ~6 minutes), with real off-target/on-target scoring via
+[FlashFry](https://github.com/mckennalab/FlashFry) and optional CNN-based
+enhancer/promoter efficacy scoring via
+[launch-dCas9](https://github.com/Wancen/launch-dCas9).
 
-## Status
+## Features
 
-**Working MVP via `run_standalone.sh`, validated against real hg38 + real
-FlashFry output on the cluster.** The Nextflow pipeline (`main.nf`) wires the
-same underlying logic but hasn't been run for real yet (needs either the
-hosted reference bundle + Docker images to be published, or `-profile bare`
-against your existing local install). See "Nextflow (not yet run for real)"
-below.
+- **Two input types, flexible formats**: SNPs (`chr:pos`, 1-based, or legacy
+  BED) and enhancers (`chr:start-end`, or legacy BED) — auto-detected per
+  line, malformed lines skipped with a warning rather than aborting the run.
+- **Fast, memory-safe parallel execution**: FlashFry discover/score is
+  chunked and run in parallel, either locally (auto-sized to your CPU count
+  and available RAM) or as a SLURM array job.
+- **Real ranking**: hard filters (seed score, GC content, poly-T, multi-site
+  genomic match, FlashFry overflow) exclude bad guides; passing guides get a
+  weighted composite score (CRISPRi/general off-target specificity, CFD
+  specificity, closest off-target distance, RNA folding energy, and
+  optionally launch-dCas9 on-target efficacy) and are ranked per target.
+- **Optional ATAC-seq integration**: pass a narrowPeak file to annotate each
+  guide with its distance to the nearest accessible-chromatin peak summit —
+  one of the strongest predictors of CRISPRi efficacy in noncoding regions.
+- **Zero manual reference setup**: the hg38 FASTA and FlashFry index are
+  hosted on Zenodo and fetched with one command.
 
-## How to run this, every time (the short version)
+## Installation
 
-1. Download the zip from the chat, upload/replace it in your sandbox directory.
-2. Unzip it (this overwrites the code, but **does not** touch anything you
-   put outside this folder, like your own BED files):
-   ```bash
-   cd /home/jmorrislab1/mkazemi/___ProJECTS___/Blair/gRNA_design_tool/sandbox
-   unzip -o crispri-guide-designer.zip
-   cd crispri-guide-designer
-   ```
-3. Run it:
-   ```bash
-   ./run_standalone.sh --snp_bed /path/to/snps.bed --enhancer_bed /path/to/enhancers.bed --dedup_blast_radius
-   ```
-
-That's it — you do **not** need to pass `--fasta`, `--flashfry_jar`, or
-`--flashfry_db` every time. Those are read automatically from
-`local_paths.env` (sitting next to the script), which is pre-filled with your
-real cluster paths:
-```
-FASTA=/home/jmorrislab1/mkazemi/bin/hg38.fa
-FLASHFRY_JAR=/home/jmorrislab1/mkazemi/bin/FlashFry-assembly-1.15.jar
-FLASHFRY_DB=/home/jmorrislab1/mkazemi/bin/hg38_standard_cas9ngg_db
-```
-If any of those paths ever change, edit `local_paths.env` (or pass
-`--fasta`/`--flashfry_jar`/`--flashfry_db` on the command line to override
-just for one run).
-
-**The script also doesn't care what your current directory is** when you run
-it — all of its own file lookups (the `bin/` scripts, `local_paths.env`,
-default output location `results/`) are resolved relative to *where the
-script itself lives*, not your working directory. `--snp_bed`/
-`--enhancer_bed`, on the other hand, are resolved relative to your current
-directory (or you can just use absolute paths) — so your BED files can live
-anywhere, no need to copy them into this folder.
-
-Output lands in `results/guides.ranked.tsv` inside this folder by default
-(override with `--outdir`).
-
-Only `--bed` is required. On first run, the pipeline downloads a pre-built hg38
-reference FASTA + FlashFry index (main chromosomes only, no alt scaffolds, no chrM)
-into `~/.crispri-guide-designer/` and reuses it on every subsequent run.
-
-See `main.nf --help` for the full parameter list.
-
-## Design decisions (from planning discussion)
-
-### Nextflow (not yet run for real)
+Requires Python ≥3.10, [FlashFry](https://github.com/mckennalab/FlashFry)
+(a JVM tool — needs Java), `bedtools`, and `samtools`.
 
 ```bash
-# Testing against your existing local FlashFry install (no containers needed):
-nextflow run main.nf \
-    --snp_bed snps.bed --enhancer_bed enhancers.bed \
-    --local_fasta /home/jmorrislab1/mkazemi/bin/hg38.fa \
-    --local_flashfry_jar /home/jmorrislab1/mkazemi/bin/FlashFry-assembly-1.15.jar \
-    --local_flashfry_db /home/jmorrislab1/mkazemi/bin/hg38_standard_cas9ngg_db \
-    --dedup_blast_radius \
-    -profile bare
-
-# Once the hosted reference bundle + Docker images are published:
-nextflow run main.nf --snp_bed snps.bed --enhancer_bed enhancers.bed -profile standard,docker
+git clone git@github.com:MikeKazz/GuideNet.git
+cd GuideNet
+pip install -e .
 ```
 
-- **PAM-finding delegated to FlashFry's `discover`** (not a custom R scanner) —
-  simpler pipeline, one fewer custom code path.
-- **Two input types, two BED files**: `--snp_bed` (point targets, ±150bp search
-  window) and `--enhancer_bed` (interval targets, interval ±50bp flank). Either
-  or both may be supplied in one run.
-- **CRISPRi silencing radius (~1kb)** governs two things: (1) optional flagging
-  of input targets within `blast_radius_bp` of each other (`--dedup_blast_radius`
-  — flags as linked, does NOT merge/collapse them), and (2) post-hoc flagging of
-  guides whose site falls outside that radius from the intended target
-  (SNP position, or enhancer midpoint).
-- **No `--transformPositions`**: genome coordinates are recovered by parsing the
-  FASTA header (`<region_id>__<chrom>:<padded_start>-<padded_end>`, written by
-  `prep_regions.py`) out of FlashFry's `contig` output column — this mirrors the
-  existing `id_<n>_chr:start-end_<seq>` convention already used in production,
-  adapted to region-level (not per-guide) FASTA input.
-- **Scoring metrics and column names verified against real FlashFry output**
-  (not just docs): `Doench2014OnTarget, DoenchCFD_maxOT,
-  DoenchCFD_specificityscore, dangerous_GC, dangerous_polyT,
-  dangerous_in_genome, Hsu2013, Moreno-Mateos2015OnTarget, JostCRISPRi_maxOT,
-  JostCRISPRi_specificityscore, basesDiffToClosestHit, closestHitCount,
-  0-1-2-3-4_mismatch, FreeEnergy20, otCount`. `JostCRISPRi_specificityscore` is
-  the CRISPRi-specific off-target metric and current provisional ranking key.
-- **`--maxMismatch 3`** for both `discover` and `score` (FlashFry default).
-- Real sample output showed `Doench2014OnTarget = NA` when guides were scored
-  with only a fixed 10bp synthetic flank (the old script's `FlashFrySEQ`
-  padding). This pipeline extracts real genomic flanking sequence per region
-  (default 50bp for enhancers, 150bp for SNPs) instead, which should resolve it
-  — not yet confirmed against a real run.
-- **Reference/index**: hosted as a versioned release bundle (see
-  `assets/build_reference_index.md`), auto-downloaded and cached locally.
-- **Execution**: Nextflow's native `slurm` executor replaces manual `sbatch`
-  array-job scripting; `-resume` replaces manual skip-if-exists chunk tracking.
-- **Containers**: one lightweight Python+bedtools image for all non-FlashFry
-  steps (PAM-finding is fully delegated to FlashFry, so no Bioconductor/R stack
-  is needed), one image with the FlashFry JAR baked in.
+(Once published to PyPI: `pip install crispri-guide-designer`.)
 
-## Repo layout
+## First-time setup
 
-```
-main.nf                        Top-level workflow
-nextflow.config                Default params + profile includes
-conf/
-  base.config                  Per-process resource defaults
-  standard.config               Local execution profile
-  slurm.config                  SLURM execution profile (edit queue/account for your cluster)
-modules/local/
-  setup_reference.nf            Cache-aware reference + FlashFry index fetch
-  prep_regions.nf                BED parsing, optional blast-radius dedup, FASTA extraction
-  flashfry_discover.nf           FlashFry `discover`
-  flashfry_score.nf              FlashFry `score`
-  annotate.nf                    Merge + map guides back to regions, distance/window flagging
-  rank_report.nf                 PLACEHOLDER — ranking logic TBD
-containers/
-  flashfry/Dockerfile            FlashFry JAR baked in
-  r-env/Dockerfile                Bioconductor R environment
-assets/
-  build_reference_index.md       Exact recipe for building/hosting the reference bundle
+```bash
+# 1. Download the hg38 reference + FlashFry index (~3.2GB total)
+crispri-guide-designer setup-reference --outdir ~/.guidenet_reference
+
+# 2. Point the tool at it + your FlashFry install
+crispri-guide-designer configure --set reference.fasta=~/.guidenet_reference/hg38.fa
+crispri-guide-designer configure --set reference.flashfry_jar=/path/to/FlashFry-assembly-1.15.jar
+crispri-guide-designer configure --set reference.flashfry_db=~/.guidenet_reference/hg38_standard_cas9ngg_db
 ```
 
-## Open items before this is runnable end-to-end
+Config lives at `~/.config/crispri-guide-designer/config.toml` — set once,
+used automatically on every run after. FlashFry itself isn't hosted by this
+tool; download it separately from its
+[GitHub releases](https://github.com/mckennalab/FlashFry/releases).
 
-1. Host the reference/index bundle (Zenodo / GitHub Releases / S3) and set
-   `params.reference_url_base` + implement the actual download logic in
-   `SETUP_REFERENCE`.
-2. Build and publish the two Docker images; replace `TODO/...` container refs
-   in each module with real image URIs.
-3. Implement `PREP_REGIONS` (port blast-radius dedup + windowing logic from
-   `230825_design-gRNAs.R`, generalized to arbitrary BED input).
-4. Implement `ANNOTATE` (merge scored chunks, join to region metadata, distance
-   calc, window flagging).
-5. Define and implement ranking logic in `RANK_AND_REPORT`.
-6. Repeat/poly-T/duplicate-spacer hard filters from the original script still
-   need a home — likely in `PREP_REGIONS` or as a new step between `FLASHFRY_SCORE`
-   and `ANNOTATE`.
+### Optional: launch-dCas9 (enhancer/promoter on-target scoring)
+
+Requires a separate conda environment with `torch` (see
+[launch-dCas9](https://github.com/Wancen/launch-dCas9)). Checkpoints ship in
+this repo (`checkpoints/`, ~1MB each) — no separate download.
+
+```bash
+crispri-guide-designer configure --set launch_dcas9.venv_python=/path/to/conda/envs/launch-dCas9/bin/python
+crispri-guide-designer configure --set launch_dcas9.script=/path/to/launch-dCas9.py
+```
+
+### Optional: SLURM
+
+If running `--executor slurm`, set your cluster's resource defaults once:
+
+```bash
+crispri-guide-designer configure --set slurm.partition=your_partition
+crispri-guide-designer configure --set slurm.gres=gpu:1   # blank if no GPU needed
+crispri-guide-designer configure --set slurm.mem=16G
+crispri-guide-designer configure --set slurm.cpus=8
+crispri-guide-designer configure --set slurm.time=2:00:00
+```
+
+## Usage
+
+```bash
+crispri-guide-designer run \
+    --snp-bed snps.txt \
+    --enhancer-bed enhancers.txt \
+    --dedup-blast-radius \
+    --outdir results
+```
+
+At least one of `--snp-bed` / `--enhancer-bed` is required; both may be
+given together. Input files accept either plain text (`chr:pos` per line for
+SNPs, `chr:start-end` per line for enhancers) or legacy tab-separated BED.
+
+Output: `results/guides.ranked.tsv` — one row per candidate guide, annotated
+with all FlashFry scores, genome coordinates, hard-filter results, and
+`rank` (1 = best, per target; `exclude (<reason>)` if it failed a filter).
+
+### Common options
+
+| Flag | Default | Description |
+|---|---|---|
+| `--dedup-blast-radius` | off | Flag input targets within 1kb of each other (does not merge) |
+| `--blast-radius-bp` | 1000 | CRISPRi silencing window, bp |
+| `--flank-bp` | 50 | Enhancer-type: padding added around each interval |
+| `--snp-window-bp` | 150 | SNP-type: search window on each side of the point |
+| `--atac-narrowpeak` | none | ENCODE-standard narrowPeak file; adds `distance_to_atac_summit` column (informational, not yet in ranking) |
+| `--run-launch-dcas9` | off | Add launch-dCas9 enhancer/promoter efficacy scoring |
+| `--executor` | `local` | `local` or `slurm` |
+| `--n-workers` | auto | Parallel chunks; auto-sized by CPU count and available RAM if unset |
+
+Run `crispri-guide-designer run --help` for the full list.
+
+## How it works
+
+1. **Prep regions** — pad each target, extract sequence from hg38, encode
+   genome coordinates into FASTA headers.
+2. **FlashFry discover + score** — split into chunks, run in parallel
+   (local processes or SLURM array).
+3. **Annotate** — merge chunks, recover genome coordinates, flag guides
+   within the CRISPRi blast radius, compute ATAC summit distance if given.
+4. **launch-dCas9** *(optional)* — CNN-scored enhancer/promoter on-target
+   efficacy, same chunked parallel execution.
+5. **Rank** — hard filters exclude bad guides; passing guides get a
+   weighted composite score and a per-target rank.
+
+## Performance
+
+Validated on a 40-core / 125GB node: 3,517 real enhancer regions (~464,000
+candidate guides) processed end-to-end in ~6 minutes — about 13× faster
+than unchunked, single-process execution, with parallelism auto-capped to
+stay within available memory (each FlashFry chunk loads the full off-target
+index, so more workers isn't always faster — see `_default_n_workers` in
+`cli.py`).
+
+## Repository layout
+
+```
+src/crispri_guide_designer/
+  cli.py               crispri-guide-designer command (run / configure / setup-reference)
+  config.py            ~/.config/crispri-guide-designer/config.toml management
+  executor.py           local-parallel and SLURM-array execution
+  flashfry_chunked.py   chunked FlashFry orchestration
+  scripts/               region prep, annotation, ranking, launch-dCas9 scoring
+checkpoints/            launch-dCas9 pretrained weights (bundled, ~1MB each)
+test_data/               small real-coordinate fixtures for smoke testing
+run_standalone.sh        bash-only alternative entry point (no pip install needed)
+inspect_repo.sh          pre-commit sanity checks (large files, stray artifacts, etc.)
+```
+
+## Known limitations
+
+- FlashFry (JVM) and launch-dCas9 (conda/torch) are external dependencies,
+  not bundled — `pip install` gets you the orchestration tool, not those.
+- `--executor slurm` is implemented but not yet run-verified end-to-end
+  (validated extensively with `--executor local`).
+- ATAC distance is computed and reported but not yet part of the ranking
+  formula.
+
+## License
+
+MIT
