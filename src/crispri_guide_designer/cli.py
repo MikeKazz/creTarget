@@ -72,7 +72,6 @@ def cmd_configure(args):
     print("Edit it directly, or set individual values with:")
     print("  crispri-guide-designer configure --set reference.fasta=/path/to/hg38.fa")
     if args.set:
-        import tomllib  # noqa
         # Minimal manual TOML patch (avoid adding a write-capable TOML dep):
         # read as text, replace matching `key = ` lines under the right section.
         text = path.read_text()
