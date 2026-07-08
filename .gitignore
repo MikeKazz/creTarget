@@ -26,3 +26,6 @@ results_pip_test/
 results_format_test/
 results_new_format_test/
 results_atac_real_test/
+results_atac_celltype_test/
+results_atac_celltype_test2/
+atac_staging/

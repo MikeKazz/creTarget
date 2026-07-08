@@ -27,6 +27,7 @@ from importlib.resources import files
 from pathlib import Path
 
 from . import config as cfg
+from . import atac_cache
 from .executor import get_executor
 from .flashfry_chunked import run_chunked_discover_score
 
@@ -155,6 +156,13 @@ def cmd_run(args):
     if not args.snp_bed and not args.enhancer_bed:
         raise SystemExit("ERROR: at least one of --snp-bed / --enhancer-bed is required")
 
+    if args.atac_narrowpeak and args.atac_cell_type:
+        raise SystemExit("ERROR: --atac-narrowpeak and --atac-cell-type are mutually exclusive, pick one")
+
+    atac_narrowpeak_path = args.atac_narrowpeak
+    if args.atac_cell_type:
+        atac_narrowpeak_path = atac_cache.get_atac_path(args.atac_cell_type)
+
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -234,8 +242,8 @@ def cmd_run(args):
         "--blast_radius_bp", str(args.blast_radius_bp),
         "--out", str(annotated),
     ]
-    if args.atac_narrowpeak:
-        annotate_args += ["--atac_narrowpeak", args.atac_narrowpeak]
+    if atac_narrowpeak_path:
+        annotate_args += ["--atac_narrowpeak", atac_narrowpeak_path]
     _run_py_script("annotate.py", annotate_args)
 
     annotated_for_rank = annotated
@@ -307,7 +315,12 @@ def main():
     p_run.add_argument("--dedup-blast-radius", dest="dedup_blast_radius", action="store_true")
     p_run.add_argument("--atac-narrowpeak", dest="atac_narrowpeak", default=None,
                         help="optional ENCODE-standard 10-column narrowPeak file (single cell type); "
-                             "adds distance_to_atac_summit column, informational only (not used in ranking yet)")
+                             "adds distance_to_atac_summit column, informational only (not used in ranking yet). "
+                             "Mutually exclusive with --atac-cell-type.")
+    p_run.add_argument("--atac-cell-type", dest="atac_cell_type", default=None,
+                        choices=sorted(atac_cache.CELL_TYPES.keys()),
+                        help="use bundled ATAC-seq peaks for this cell type instead of supplying your own file "
+                             "(auto-downloaded and cached on first use). Mutually exclusive with --atac-narrowpeak.")
     p_run.add_argument("--blast-radius-bp", dest="blast_radius_bp", type=int, default=1000)
     p_run.add_argument("--flank-bp", dest="flank_bp", type=int, default=50)
     p_run.add_argument("--snp-window-bp", dest="snp_window_bp", type=int, default=150)
