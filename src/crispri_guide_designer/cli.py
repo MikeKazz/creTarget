@@ -26,8 +26,11 @@ import sys
 from importlib.resources import files
 from pathlib import Path
 
+import pandas as pd
+
 from . import config as cfg
 from . import atac_cache
+from . import seed_finder_integrate
 from .executor import get_executor
 from .flashfry_chunked import run_chunked_discover_score
 
@@ -73,7 +76,6 @@ def cmd_configure(args):
     print("Edit it directly, or set individual values with:")
     print("  crispri-guide-designer configure --set reference.fasta=/path/to/hg38.fa")
     if args.set:
-        import tomllib  # noqa
         # Minimal manual TOML patch (avoid adding a write-capable TOML dep):
         # read as text, replace matching `key = ` lines under the right section.
         text = path.read_text()
@@ -158,6 +160,9 @@ def cmd_run(args):
 
     if args.atac_narrowpeak and args.atac_cell_type:
         raise SystemExit("ERROR: --atac-narrowpeak and --atac-cell-type are mutually exclusive, pick one")
+
+    if args.run_seed_finder and (args.seed_finder_min_length is None or args.seed_finder_tss_window is None):
+        raise SystemExit("ERROR: --run-seed-finder requires both --seed-finder-min-length and --seed-finder-tss-window")
 
     atac_narrowpeak_path = args.atac_narrowpeak
     if args.atac_cell_type:
@@ -302,7 +307,27 @@ def cmd_run(args):
         "--out", str(ranked),
     ])
 
-    print(f"\nDone. Final output: {ranked}", file=sys.stderr)
+    final_output = ranked
+
+    # ---- 6. Optional seed-finder-lite off-target annotation ----
+    if args.run_seed_finder:
+        seed_finder_dir = cfg.require(conf, "seed_finder", "dir")
+        seed_finder_python = conf.get("seed_finder", {}).get("python_bin") or None
+
+        ranked_df = pd.read_csv(ranked, sep="\t")
+        summary, raw_hits_path, guide_ids = seed_finder_integrate.run_seed_finder(
+            ranked_df, seed_finder_dir, args.seed_finder_min_length, args.seed_finder_tss_window,
+            str(outdir), python_bin=seed_finder_python)
+
+        ranked_df["_guide_id"] = guide_ids
+        summary = summary.rename(columns={"guide_id": "_guide_id"})
+        final_df = ranked_df.merge(summary, on="_guide_id", how="left").drop(columns=["_guide_id"])
+
+        final_output = outdir / "guides.final.tsv"
+        final_df.to_csv(final_output, sep="\t", index=False)
+        print(f"seed-finder-lite: raw hit-level detail -> {raw_hits_path}", file=sys.stderr)
+
+    print(f"\nDone. Final output: {final_output}", file=sys.stderr)
 
 
 def main():
@@ -332,6 +357,16 @@ def main():
     p_run.add_argument("--n-workers", dest="n_workers", type=int, default=None)
     p_run.add_argument("--run-launch-dcas9", dest="run_launch_dcas9", action="store_true")
     p_run.add_argument("--launch-chunk-size", dest="launch_chunk_size", type=int, default=200000)
+    p_run.add_argument("--run-seed-finder", dest="run_seed_finder", action="store_true",
+                        help="run seed-finder-lite (off-target seed/TSS-proximity search) as a final step, "
+                             "adding summary columns to the output. Requires --seed-finder-min-length and "
+                             "--seed-finder-tss-window, and [seed_finder].dir set in config.")
+    p_run.add_argument("--seed-finder-min-length", dest="seed_finder_min_length", type=int, default=None,
+                        help="minimum exact-match seed length for seed-finder-lite (e.g. 8). No default -- "
+                             "you must choose this deliberately (see seed-finder-lite's own documentation).")
+    p_run.add_argument("--seed-finder-tss-window", dest="seed_finder_tss_window", type=int, default=None,
+                        help="max distance (bp) from a TSS to count as a hit for seed-finder-lite (e.g. 1000). "
+                             "No default -- you must choose this deliberately.")
     p_run.add_argument("--fasta", default=None, help="override config's [reference].fasta")
     p_run.add_argument("--flashfry-jar", dest="flashfry_jar", default=None)
     p_run.add_argument("--flashfry-db", dest="flashfry_db", default=None)

@@ -38,6 +38,10 @@ gres = ""
 mem = "16G"
 cpus = "8"
 time = "2:00:00"
+
+[seed_finder]
+dir = ""                # path to seed-finder-lite-main (the dir containing src/ and refs/)
+python_bin = ""         # optional: python with pyfaidx installed; defaults to whatever runs crispri-guide-designer itself
 """
 
 
