@@ -49,3 +49,4 @@ test_data/ccre_chr1_pilot.bed
 logs/
 analysis/
 cCRE_data_exploration/
+run_ccre_batches.sbatch
