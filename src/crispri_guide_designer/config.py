@@ -38,6 +38,8 @@ gres = ""
 mem = "16G"
 cpus = "8"
 time = "2:00:00"
+max_array_size = "1000"   # SLURM cluster's MaxArraySize -- check with `scontrol show config | grep MaxArraySize`
+array_throttle = ""        # optional: max concurrently-running array tasks (SLURM %N syntax), blank = no throttle
 
 [seed_finder]
 dir = ""                # path to seed-finder-lite-main (the dir containing src/ and refs/)

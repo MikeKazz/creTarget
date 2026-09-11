@@ -21,6 +21,34 @@ import sys
 from pathlib import Path
 
 
+def compute_slurm_chunking(n_regions: int, chunk_size: int, max_array_size: int) -> tuple:
+    """Given a target chunk_size (regions per array task) and a hard cap on
+    array size (max_array_size -- SLURM's MaxArraySize, cluster-configured,
+    commonly 1000-10001), returns (n_chunks, effective_chunk_size).
+
+    If the naive chunk count (ceil(n_regions / chunk_size)) would exceed
+    max_array_size, chunk_size is increased just enough to bring the count
+    under the cap -- this is a deliberate, visible adjustment (the caller
+    should print a warning when effective_chunk_size != chunk_size), not a
+    silent one.
+    """
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be >= 1")
+    if max_array_size < 1:
+        raise ValueError("max_array_size must be >= 1")
+
+    def _ceil_div(a, b):
+        return -(-a // b)
+
+    n_chunks = max(1, min(_ceil_div(n_regions, chunk_size), n_regions))
+    if n_chunks <= max_array_size:
+        return n_chunks, chunk_size
+
+    effective_chunk_size = max(1, _ceil_div(n_regions, max_array_size))
+    n_chunks = max(1, min(_ceil_div(n_regions, effective_chunk_size), n_regions))
+    return n_chunks, effective_chunk_size
+
+
 def read_fasta_records(fasta_path):
     """Yields (header, sequence_lines_joined) tuples."""
     header = None

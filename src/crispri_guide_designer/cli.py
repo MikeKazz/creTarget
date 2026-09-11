@@ -32,7 +32,7 @@ from . import config as cfg
 from . import atac_cache
 from . import seed_finder_integrate
 from .executor import get_executor
-from .flashfry_chunked import run_chunked_discover_score
+from .flashfry_chunked import run_chunked_discover_score, compute_slurm_chunking
 
 
 def _script_path(name: str) -> str:
@@ -213,12 +213,29 @@ def cmd_run(args):
     print(f"=== {n_regions} total regions ===", file=sys.stderr)
 
     # ---- 2. Chunked FlashFry discover+score ----
-    n_workers = args.n_workers or _default_n_workers(n_regions)
-    print(f"=== FlashFry (executor={args.executor}, n_workers={n_workers}) ===", file=sys.stderr)
+    # Chunk count means different things per executor: for --executor local
+    # it is local parallelism, bounded by THIS machine's CPU/RAM. For
+    # --executor slurm it must instead be driven by --chunk-size (regions
+    # per array task) so array size scales with the DATA, not with whatever
+    # machine happened to submit the job -- the login node's specs have
+    # nothing to do with the compute cluster being submitted to.
     if args.executor == "local":
+        n_workers = args.n_workers or _default_n_workers(n_regions)
+        print(f"=== FlashFry (executor=local, n_workers={n_workers}) ===", file=sys.stderr)
         executor = get_executor("local", n_workers=n_workers)
+        n_chunks = n_workers
     else:
         slurm_conf = conf.get("slurm", {})
+        chunk_size = args.chunk_size or 5000
+        max_array_size = int(slurm_conf.get("max_array_size", "1000") or "1000")
+        array_throttle = slurm_conf.get("array_throttle") or None
+        n_chunks, effective_chunk_size = compute_slurm_chunking(n_regions, chunk_size, max_array_size)
+        if effective_chunk_size != chunk_size:
+            print(f"WARNING: chunk_size={chunk_size} would produce more than "
+                  f"max_array_size={max_array_size} array tasks; increasing chunk_size to "
+                  f"{effective_chunk_size} regions/chunk instead", file=sys.stderr)
+        print(f"=== FlashFry (executor=slurm, {n_chunks} array task(s), "
+              f"~{effective_chunk_size} regions/chunk) ===", file=sys.stderr)
         executor = get_executor(
             "slurm",
             partition=slurm_conf.get("partition", ""),
@@ -226,6 +243,7 @@ def cmd_run(args):
             mem=slurm_conf.get("mem", "16G"),
             cpus=slurm_conf.get("cpus", "8"),
             time=slurm_conf.get("time", "2:00:00"),
+            array_throttle=array_throttle,
         )
 
     scored_chunks = run_chunked_discover_score(
@@ -236,7 +254,7 @@ def cmd_run(args):
         scoring_metrics=args.scoring_metrics,
         executor=executor,
         outdir=str(outdir),
-        n_chunks=n_workers,
+        n_chunks=n_chunks,
     )
 
     # ---- 3. Annotate ----
@@ -354,7 +372,12 @@ def main():
                         default="doench2014ontarget,doench2016cfd,dangerous,hsu2013,moreno2015,jostandsantos,minot,folding")
     p_run.add_argument("--outdir", default="results")
     p_run.add_argument("--executor", choices=["local", "slurm"], default="local")
-    p_run.add_argument("--n-workers", dest="n_workers", type=int, default=None)
+    p_run.add_argument("--n-workers", dest="n_workers", type=int, default=None,
+                        help="local execution only: parallel worker count, auto-sized by CPU/RAM if unset")
+    p_run.add_argument("--chunk-size", dest="chunk_size", type=int, default=None,
+                        help="SLURM execution only: regions per array task (default 5000). "
+                             "Array size is capped at [slurm].max_array_size in config; "
+                             "chunk_size is auto-increased if needed to stay under that cap.")
     p_run.add_argument("--run-launch-dcas9", dest="run_launch_dcas9", action="store_true")
     p_run.add_argument("--launch-chunk-size", dest="launch_chunk_size", type=int, default=200000)
     p_run.add_argument("--run-seed-finder", dest="run_seed_finder", action="store_true",

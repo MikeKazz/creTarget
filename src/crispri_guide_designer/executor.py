@@ -79,7 +79,7 @@ class SlurmExecutor:
 
     def __init__(self, partition="", gres="", mem="16G", cpus="8", time_="2:00:00",
                  poll_interval=30, max_consecutive_poll_failures=10,
-                 sacct_max_retries=5, sacct_retry_delay=5):
+                 sacct_max_retries=5, sacct_retry_delay=5, array_throttle=None):
         self.partition = partition
         self.gres = gres
         self.mem = mem
@@ -89,6 +89,7 @@ class SlurmExecutor:
         self.max_consecutive_poll_failures = max_consecutive_poll_failures
         self.sacct_max_retries = sacct_max_retries
         self.sacct_retry_delay = sacct_retry_delay
+        self.array_throttle = array_throttle
 
     def run_batch(self, commands: list[str], logdir: str, labels: list[str] | None = None) -> list[ChunkResult]:
         logdir_path = Path(logdir)
@@ -103,6 +104,8 @@ class SlurmExecutor:
             task_script.chmod(0o755)
 
         array_range = f"0-{len(commands) - 1}"
+        if self.array_throttle:
+            array_range += f"%{self.array_throttle}"
         sbatch_cmd = ["sbatch", "--parsable", "--array", array_range,
                       "--mem", self.mem, "--cpus-per-task", self.cpus, "--time", self.time,
                       "-o", str(logdir_path / "%a.log"), "-e", str(logdir_path / "%a.err")]
@@ -242,6 +245,7 @@ def get_executor(kind: str, **kwargs):
             mem=kwargs.get("mem", "16G"),
             cpus=kwargs.get("cpus", "8"),
             time_=kwargs.get("time", "2:00:00"),
+            array_throttle=kwargs.get("array_throttle"),
         )
     else:
         raise ValueError(f"Unknown executor kind: {kind}")
