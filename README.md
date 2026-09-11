@@ -180,8 +180,9 @@ inspect_repo.sh                pre-commit sanity checks (large files, stray arti
 - FlashFry (JVM), launch-dCas9 (conda/torch), and seed-finder-lite are
   external dependencies, not bundled — `pip install` gets you the
   orchestration tool, not those.
-- `--executor slurm` is implemented but not yet run-verified end-to-end
-  (validated extensively with `--executor local`).
+- `--executor slurm` is fully validated: real job submission, `squeue` polling, and
+  `sacct`-based exit-code verification confirmed end-to-end (including deliberately
+  tested failure-detection logic for segfaulted/OOM/timed-out tasks).
 - ATAC distance is computed and reported but not yet part of the ranking
   formula.
 
