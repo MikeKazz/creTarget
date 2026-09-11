@@ -32,7 +32,9 @@ from . import config as cfg
 from . import atac_cache
 from . import seed_finder_integrate
 from .executor import get_executor
-from .flashfry_chunked import run_chunked_discover_score, compute_slurm_chunking
+from .flashfry_chunked import (
+    run_chunked_discover_score, compute_slurm_chunking, parse_mem_to_gb, compute_jvm_heap_sizes,
+)
 
 
 def _script_path(name: str) -> str:
@@ -46,15 +48,10 @@ def _run_py_script(name: str, args: list[str]):
         raise SystemExit(f"ERROR: {name} failed (exit {result.returncode})")
 
 
-def _default_n_workers(n_regions: int) -> int:
-    """min(cpu_count, available_ram_gb // 3), capped at n_regions -- validated
-    on real hardware (see project notes): this formula kept a 3517-region /
-    ~464K-guide run comfortably within available memory while matching the
-    speed of a much more aggressive, memory-risky chunk count."""
-    cpu_count = os.cpu_count() or 4
+def _get_available_ram_gb() -> float:
     try:
         import psutil
-        available_gb = psutil.virtual_memory().available / (1024 ** 3)
+        return psutil.virtual_memory().available / (1024 ** 3)
     except ImportError:
         # Fallback if psutil isn't installed: read /proc/meminfo directly (Linux)
         available_gb = 16.0
@@ -66,6 +63,16 @@ def _default_n_workers(n_regions: int) -> int:
                         break
         except FileNotFoundError:
             pass
+        return available_gb
+
+
+def _default_n_workers(n_regions: int) -> int:
+    """min(cpu_count, available_ram_gb // 3), capped at n_regions -- validated
+    on real hardware (see project notes): this formula kept a 3517-region /
+    ~464K-guide run comfortably within available memory while matching the
+    speed of a much more aggressive, memory-risky chunk count."""
+    cpu_count = os.cpu_count() or 4
+    available_gb = _get_available_ram_gb()
     mem_limited = max(1, int(available_gb // 3))
     return max(1, min(cpu_count, mem_limited, n_regions))
 
@@ -224,6 +231,8 @@ def cmd_run(args):
         print(f"=== FlashFry (executor=local, n_workers={n_workers}) ===", file=sys.stderr)
         executor = get_executor("local", n_workers=n_workers)
         n_chunks = n_workers
+        per_worker_mem_gb = max(1.0, _get_available_ram_gb() / n_workers)
+        discover_heap_gb, score_heap_gb = compute_jvm_heap_sizes(per_worker_mem_gb)
     else:
         slurm_conf = conf.get("slurm", {})
         chunk_size = args.chunk_size or 5000
@@ -236,6 +245,8 @@ def cmd_run(args):
                   f"{effective_chunk_size} regions/chunk instead", file=sys.stderr)
         print(f"=== FlashFry (executor=slurm, {n_chunks} array task(s), "
               f"~{effective_chunk_size} regions/chunk) ===", file=sys.stderr)
+        slurm_mem_gb = parse_mem_to_gb(slurm_conf.get("mem", "16G"))
+        discover_heap_gb, score_heap_gb = compute_jvm_heap_sizes(slurm_mem_gb)
         executor = get_executor(
             "slurm",
             partition=slurm_conf.get("partition", ""),
@@ -243,6 +254,11 @@ def cmd_run(args):
             mem=slurm_conf.get("mem", "16G"),
             cpus=slurm_conf.get("cpus", "8"),
             time=slurm_conf.get("time", "2:00:00"),
+            account=slurm_conf.get("account", ""),
+            qos=slurm_conf.get("qos", ""),
+            constraint=slurm_conf.get("constraint", ""),
+            preamble=slurm_conf.get("preamble", ""),
+            extra_args=slurm_conf.get("extra_args", ""),
             array_throttle=array_throttle,
         )
 
@@ -255,6 +271,8 @@ def cmd_run(args):
         executor=executor,
         outdir=str(outdir),
         n_chunks=n_chunks,
+        discover_heap_gb=discover_heap_gb,
+        score_heap_gb=score_heap_gb,
     )
 
     # ---- 3. Annotate ----
@@ -285,8 +303,14 @@ def cmd_run(args):
         for d in (chunk_dir, enh_dir, pro_dir):
             d.mkdir(parents=True, exist_ok=True)
 
+        launch_chunk_size = args.launch_chunk_size
+        if args.executor == "slurm":
+            slurm_conf = conf.get("slurm", {})
+            max_array_size = int(slurm_conf.get("max_array_size", "1000") or "1000")
+            n_annotated_guides = sum(1 for _ in open(annotated)) - 1
+            _, launch_chunk_size = compute_slurm_chunking(n_annotated_guides, launch_chunk_size, max_array_size)
         _run_py_script("launch_dcas9_split.py", [
-            "--annotated", str(annotated), "--chunk_size", str(args.launch_chunk_size),
+            "--annotated", str(annotated), "--chunk_size", str(launch_chunk_size),
             "--outdir", str(chunk_dir),
         ])
         n_chunks = int((chunk_dir / "n_chunks.txt").read_text().strip())

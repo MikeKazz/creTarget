@@ -70,49 +70,67 @@ class LocalExecutor:
 
 class SlurmExecutor:
     """Submits an array job where each task runs one chunk's command (each
-    command is written to its own tiny shell script, dispatched by array
-    index). Waits via squeue polling, then verifies REAL per-task exit
-    codes via sacct -- squeue only tells you a task left the queue, not
-    whether it succeeded, and a log file existing is not evidence of
-    success either (SLURM creates it the moment the task starts, so a
-    segfault/OOM/walltime-kill still leaves a log file behind)."""
+    command is written to its own tiny shell script, prefixed with an
+    optional site-specific preamble, dispatched by array index). Blocks via
+    `sbatch --wait` (robust against long-poll issues -- the C client
+    handles the waiting, not a Python loop that a login-node process
+    reaper might kill), then ALWAYS verifies real per-task exit codes via
+    sacct regardless of --wait's own exit status -- squeue/--wait tell you
+    a job left the queue, not whether it succeeded, and a log file
+    existing is not evidence of success either (SLURM creates it the
+    moment the task starts, so a segfault/OOM/walltime-kill still leaves
+    one behind)."""
 
     def __init__(self, partition="", gres="", mem="16G", cpus="8", time_="2:00:00",
-                 poll_interval=30, max_consecutive_poll_failures=10,
+                 account="", qos="", constraint="", preamble="", extra_args="",
                  sacct_max_retries=5, sacct_retry_delay=5, array_throttle=None):
         self.partition = partition
         self.gres = gres
         self.mem = mem
         self.cpus = cpus
         self.time = time_
-        self.poll_interval = poll_interval
-        self.max_consecutive_poll_failures = max_consecutive_poll_failures
+        self.account = account
+        self.qos = qos
+        self.constraint = constraint
+        self.preamble = preamble
+        self.extra_args = extra_args
         self.sacct_max_retries = sacct_max_retries
         self.sacct_retry_delay = sacct_retry_delay
         self.array_throttle = array_throttle
 
     def run_batch(self, commands: list[str], logdir: str, labels: list[str] | None = None) -> list[ChunkResult]:
+        import shlex
+
         logdir_path = Path(logdir)
         logdir_path.mkdir(parents=True, exist_ok=True)
         labels = labels or [f"chunk_{i:04d}" for i in range(len(commands))]
 
         task_dir = logdir_path / "tasks"
         task_dir.mkdir(exist_ok=True)
+        preamble_block = (self.preamble.rstrip() + "\n") if self.preamble.strip() else ""
         for i, cmd in enumerate(commands):
             task_script = task_dir / f"task_{i:04d}.sh"
-            task_script.write_text(f"#!/bin/bash\nset -euo pipefail\n{cmd}\n")
+            task_script.write_text(f"#!/bin/bash\nset -euo pipefail\n{preamble_block}{cmd}\n")
             task_script.chmod(0o755)
 
         array_range = f"0-{len(commands) - 1}"
         if self.array_throttle:
             array_range += f"%{self.array_throttle}"
-        sbatch_cmd = ["sbatch", "--parsable", "--array", array_range,
+        sbatch_cmd = ["sbatch", "--wait", "--parsable", "--array", array_range,
                       "--mem", self.mem, "--cpus-per-task", self.cpus, "--time", self.time,
                       "-o", str(logdir_path / "%a.log"), "-e", str(logdir_path / "%a.err")]
         if self.partition:
             sbatch_cmd += ["-p", self.partition]
         if self.gres:
             sbatch_cmd += ["--gres", self.gres]
+        if self.account:
+            sbatch_cmd += ["--account", self.account]
+        if self.qos:
+            sbatch_cmd += ["--qos", self.qos]
+        if self.constraint:
+            sbatch_cmd += ["--constraint", self.constraint]
+        if self.extra_args.strip():
+            sbatch_cmd += shlex.split(self.extra_args)
 
         wrapper = task_dir / "dispatch.sh"
         wrapper.write_text(
@@ -124,14 +142,24 @@ class SlurmExecutor:
         wrapper.chmod(0o755)
         sbatch_cmd.append(str(wrapper))
 
-        print(f"  [SlurmExecutor] submitting array job ({array_range}): {' '.join(sbatch_cmd)}", file=sys.stderr)
-        submit = subprocess.run(sbatch_cmd, capture_output=True, text=True, check=True)
-        job_id = submit.stdout.strip()
-        print(f"  [SlurmExecutor] submitted job {job_id}, waiting...", file=sys.stderr)
+        print(f"  [SlurmExecutor] submitting array job ({array_range}), blocking via --wait: "
+              f"{' '.join(sbatch_cmd)}", file=sys.stderr)
+        # --wait blocks until every array task finishes (or is cancelled/killed) --
+        # no client-side polling loop to be killed by an idle-process reaper.
+        # We do NOT trust this call's own returncode/stdout as the verdict --
+        # sacct below is the single source of truth for per-task success.
+        submit = subprocess.run(sbatch_cmd, capture_output=True, text=True)
+        job_id_line = submit.stdout.strip().splitlines()[0] if submit.stdout.strip() else ""
+        if not job_id_line:
+            raise RuntimeError(
+                f"sbatch did not return a job ID (exit {submit.returncode}). stderr: {submit.stderr.strip()}\n"
+                f"Nothing to verify -- the array job may never have been accepted by the scheduler "
+                f"(check --account/--qos/--partition/--constraint and any site-specific requirements)."
+            )
+        job_id = job_id_line
+        print(f"  [SlurmExecutor] sbatch --wait returned (job {job_id}, exit {submit.returncode}), "
+              f"verifying real exit codes via sacct...", file=sys.stderr)
 
-        self._wait_for_completion(job_id)
-
-        print(f"  [SlurmExecutor] job {job_id} no longer in queue, verifying real exit codes via sacct...", file=sys.stderr)
         states = self._sacct_states(job_id, len(commands))
 
         results = []
@@ -153,45 +181,11 @@ class SlurmExecutor:
 
         return results
 
-    def _wait_for_completion(self, job_id: str):
-        """Polls squeue until the job leaves the queue. Treats a squeue
-        FAILURE (nonzero returncode -- e.g. a transient controller hiccup,
-        common on busy shared clusters) as "still waiting, try again", NOT
-        as "job is done" -- empty/failed squeue output must not be
-        confused with an empty *successful* result."""
-        consecutive_failures = 0
-        while True:
-            pending = subprocess.run(["squeue", "-j", job_id, "-h"], capture_output=True, text=True)
-
-            if pending.returncode != 0:
-                consecutive_failures += 1
-                print(f"  [SlurmExecutor] squeue failed (exit {pending.returncode}, attempt "
-                      f"{consecutive_failures}/{self.max_consecutive_poll_failures}): "
-                      f"{pending.stderr.strip()}", file=sys.stderr)
-                if consecutive_failures >= self.max_consecutive_poll_failures:
-                    raise RuntimeError(
-                        f"squeue failed {self.max_consecutive_poll_failures} times in a row while "
-                        f"waiting for job {job_id}. This does NOT necessarily mean the job failed -- "
-                        f"it means we couldn't check. Verify job {job_id}'s status manually (squeue/sacct) "
-                        f"before assuming anything about its outcome."
-                    )
-                time.sleep(self.poll_interval)
-                continue
-
-            consecutive_failures = 0  # reset only on a genuinely successful squeue call
-
-            if not pending.stdout.strip():
-                return  # job has left the queue
-
-            n = len(pending.stdout.strip().splitlines())
-            print(f"  [SlurmExecutor] {n} task(s) still running, checking again in {self.poll_interval}s", file=sys.stderr)
-            time.sleep(self.poll_interval)
-
     def _sacct_states(self, job_id: str, n_tasks: int) -> dict:
         """Returns {task_index: (state, exitcode_str)} via sacct, retrying
         on transient sacct failures or incomplete accounting records (which
-        can lag briefly after squeue shows the job gone -- the accounting
-        DB update is not synchronous with the job leaving the queue)."""
+        can lag briefly after --wait returns -- the accounting DB update is
+        not synchronous with sbatch --wait unblocking)."""
         states: dict = {}
         for attempt in range(1, self.sacct_max_retries + 1):
             proc = subprocess.run(
@@ -245,6 +239,11 @@ def get_executor(kind: str, **kwargs):
             mem=kwargs.get("mem", "16G"),
             cpus=kwargs.get("cpus", "8"),
             time_=kwargs.get("time", "2:00:00"),
+            account=kwargs.get("account", ""),
+            qos=kwargs.get("qos", ""),
+            constraint=kwargs.get("constraint", ""),
+            preamble=kwargs.get("preamble", ""),
+            extra_args=kwargs.get("extra_args", ""),
             array_throttle=kwargs.get("array_throttle"),
         )
     else:

@@ -40,6 +40,11 @@ cpus = "8"
 time = "2:00:00"
 max_array_size = "1000"   # SLURM cluster's MaxArraySize -- check with `scontrol show config | grep MaxArraySize`
 array_throttle = ""        # optional: max concurrently-running array tasks (SLURM %N syntax), blank = no throttle
+account = ""              # many clusters reject jobs with no allocation/account specified
+qos = ""
+constraint = ""
+preamble = ""             # multi-line shell commands injected before every task (module load, conda activate, apptainer exec, etc.)
+extra_args = ""            # any other raw sbatch flags for site-specific quirks, e.g. "--nice=100 --exclude=node05"
 
 [seed_finder]
 dir = ""                # path to seed-finder-lite-main (the dir containing src/ and refs/)

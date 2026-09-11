@@ -49,6 +49,33 @@ def compute_slurm_chunking(n_regions: int, chunk_size: int, max_array_size: int)
     return n_chunks, effective_chunk_size
 
 
+def parse_mem_to_gb(mem_str: str) -> float:
+    """Parses a SLURM-style --mem value (e.g. "16G", "16000M", "16") to GB."""
+    mem_str = mem_str.strip().upper()
+    if mem_str.endswith("G"):
+        return float(mem_str[:-1])
+    if mem_str.endswith("M"):
+        return float(mem_str[:-1]) / 1024
+    if mem_str.endswith("K"):
+        return float(mem_str[:-1]) / (1024 * 1024)
+    return float(mem_str) / 1024  # bare number assumed to be MB, SLURM's own default unit
+
+
+def compute_jvm_heap_sizes(available_mem_gb: float) -> tuple:
+    """Derives (discover_heap_gb, score_heap_gb) from a single memory
+    budget -- replaces the old hardcoded -Xmx14g/-Xmx7g, which was
+    disconnected from both slurm.mem and local memory auto-sizing and
+    could OOM-kill on any allocation smaller than ~20GB. discover and
+    score run sequentially (not concurrently) within one chunk's command,
+    so they don't need to fit simultaneously -- but each needs headroom
+    beyond its own heap for JVM/OS overhead and (for discover specifically)
+    the FlashFry off-target index held outside the Java heap. Conservative
+    fractions, not tight to the limit."""
+    discover_heap = max(1, round(available_mem_gb * 0.7))
+    score_heap = max(1, round(available_mem_gb * 0.4))
+    return discover_heap, score_heap
+
+
 def read_fasta_records(fasta_path):
     """Yields (header, sequence_lines_joined) tuples."""
     header = None
@@ -92,7 +119,7 @@ def split_fasta(fasta_path, outdir, n_chunks):
 
 def run_chunked_discover_score(
     fasta_path, flashfry_jar, flashfry_db, max_mismatch, scoring_metrics,
-    executor, outdir, n_chunks,
+    executor, outdir, n_chunks, discover_heap_gb=14, score_heap_gb=7,
 ):
     """Returns list of scored chunk output paths (all successful; raises if
     any chunk failed rather than silently proceeding on incomplete data)."""
@@ -107,10 +134,10 @@ def run_chunked_discover_score(
         scored_out = os.path.join(chunk_dir, f"scored_{i:04d}.out")
         scored_paths.append(scored_out)
         cmd = (
-            f"java -Xmx14g -jar {flashfry_jar} discover "
+            f"java -Xmx{discover_heap_gb}g -jar {flashfry_jar} discover "
             f"--database {flashfry_db} --fasta {chunk_fasta} "
             f"--output {discover_out} --maxMismatch {max_mismatch} && "
-            f"java -Xmx7g -jar {flashfry_jar} score "
+            f"java -Xmx{score_heap_gb}g -jar {flashfry_jar} score "
             f"--input {discover_out} --output {scored_out} "
             f"--scoringMetrics {scoring_metrics} --database {flashfry_db} "
             f"--maxMismatch {max_mismatch}"
