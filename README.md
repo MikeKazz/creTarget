@@ -44,6 +44,10 @@ cd creTarget
 pip install -e .
 ```
 
+**GPU**: not required for the core pipeline (FlashFry design/scoring, ranking, ATAC annotation, seed-finder-lite) -- all CPU-only. A GPU is only needed for the optional `--run-launch-dcas9` step.
+
+**Cluster schedulers**: `--executor` currently supports `local` and SLURM only -- PBS and other schedulers aren't supported. On a non-SLURM cluster, use `--executor local` (optionally from inside your own PBS/etc. job script).
+
 (Once published to PyPI: `pip install creTarget`.)
 
 ## First-time setup
