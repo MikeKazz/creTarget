@@ -3,7 +3,7 @@ config.py
 
 Replaces local_paths.env now that this is a pip-installed tool (no more
 "script directory" to keep a config file next to). Config lives at
-~/.config/crispri-guide-designer/config.toml, managed via `crispri-guide-designer configure`
+~/.config/cretarget/config.toml, managed via `cretarget configure`
 or manual edit.
 """
 
@@ -15,15 +15,15 @@ try:
 except ImportError:
     import tomli as tomllib  # type: ignore
 
-CONFIG_DIR = Path(os.environ.get("CGD_CONFIG_DIR", Path.home() / ".config" / "crispri-guide-designer"))
+CONFIG_DIR = Path(os.environ.get("CRETARGET_CONFIG_DIR", Path.home() / ".config" / "cretarget"))
 CONFIG_PATH = CONFIG_DIR / "config.toml"
 
 DEFAULT_CONFIG = """\
-# crispri-guide-designer config
-# Edit this file, or run `crispri-guide-designer configure` for a guided setup.
+# cretarget config
+# Edit this file, or run `cretarget configure` for a guided setup.
 
 [reference]
-fasta = ""             # e.g. ~/.guidenet_reference/hg38.fa (see `crispri-guide-designer setup-reference`)
+fasta = ""             # e.g. ~/.guidenet_reference/hg38.fa (see `cretarget setup-reference`)
 flashfry_jar = ""       # path to FlashFry-assembly-*.jar (not hosted by us, install separately)
 flashfry_db = ""        # e.g. ~/.guidenet_reference/hg38_standard_cas9ngg_db
 
@@ -41,7 +41,7 @@ time = "2:00:00"
 
 [seed_finder]
 dir = ""                # path to seed-finder-lite-main (the dir containing src/ and refs/)
-python_bin = ""         # optional: python with pyfaidx installed; defaults to whatever runs crispri-guide-designer itself
+python_bin = ""         # optional: python with pyfaidx installed; defaults to whatever runs cretarget itself
 """
 
 
@@ -63,6 +63,6 @@ def require(config: dict, section: str, key: str) -> str:
     if not val:
         raise SystemExit(
             f"ERROR: [{section}].{key} is not set in {CONFIG_PATH}\n"
-            f"Run `crispri-guide-designer configure` or edit that file directly."
+            f"Run `cretarget configure` or edit that file directly."
         )
     return val

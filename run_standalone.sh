@@ -1,10 +1,10 @@
 #!/bin/bash
 # run_standalone.sh
 #
-# Standalone (non-Nextflow) driver for the crispri-guide-designer MVP logic.
+# Standalone (non-Nextflow) driver for the creTarget MVP logic.
 #
 # HOW TO RUN THIS (every time, no matter where you unzip it):
-#   1. cd into the folder this script is in (e.g. the unzipped crispri-guide-designer/)
+#   1. cd into the folder this script is in (e.g. the unzipped creTarget/)
 #   2. ./run_standalone.sh --snp_bed <path> --enhancer_bed <path> [options]
 #
 # You do NOT need to pass --fasta / --flashfry_jar / --flashfry_db / launch-dCas9

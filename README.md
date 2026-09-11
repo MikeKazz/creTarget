@@ -58,7 +58,7 @@ cretarget configure --set reference.flashfry_jar=/path/to/FlashFry-assembly-1.15
 cretarget configure --set reference.flashfry_db=~/.guidenet_reference/hg38_standard_cas9ngg_db
 ```
 
-Config lives at `~/.config/crispri-guide-designer/config.toml` — set once,
+Config lives at `~/.config/cretarget/config.toml` — set once,
 used automatically on every run after. FlashFry itself isn't hosted by this
 tool; download it separately from its
 [GitHub releases](https://github.com/mckennalab/FlashFry/releases).
@@ -162,7 +162,7 @@ cCREs (~2.35M regions) via fixed-size batch processing (see
 ```
 src/crispri_guide_designer/
   cli.py                     cretarget command (run / configure / setup-reference)
-  config.py                  ~/.config/crispri-guide-designer/config.toml management
+  config.py                  ~/.config/cretarget/config.toml management
   executor.py                 local-parallel and SLURM-array execution
   flashfry_chunked.py         chunked FlashFry orchestration
   atac_cache.py               bundled ATAC cell-type download/cache

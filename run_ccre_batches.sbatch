@@ -6,7 +6,7 @@
 #SBATCH -o /home/jmorrislab1/mkazemi/___ProJECTS___/Blair/gRNA_design_tool/sandbox/crispri-guide-designer/results_ccre_batches/slurm_%j.log
 #SBATCH -e /home/jmorrislab1/mkazemi/___ProJECTS___/Blair/gRNA_design_tool/sandbox/crispri-guide-designer/results_ccre_batches/slurm_%j.err
 #
-# Runs all cCRE BED batches through `crispri-guide-designer run`, ONE AT A
+# Runs all cCRE BED batches through `cretarget run`, ONE AT A
 # TIME (sequential, not parallel across batches -- deliberate, per the
 # memory pressure seen in the chr1 pilot). Resume-safe: skips any batch
 # whose guides.ranked.tsv already exists, so a resubmit after a crash
@@ -37,7 +37,7 @@ for batch_file in $(ls "${BATCH_DIR}"/*.bed | sort); do
     fi
 
     echo "=== Starting ${batch_name} at $(date) ==="
-    crispri-guide-designer run \
+    cretarget run \
         --enhancer-bed "${batch_file}" \
         --atac-cell-type k562 \
         --dedup-blast-radius \
