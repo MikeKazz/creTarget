@@ -40,6 +40,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="${SCRIPT_DIR}/bin"
+SCRIPTS_DIR="${SCRIPT_DIR}/src/crispri_guide_designer/scripts"
 ENV_FILE="${SCRIPT_DIR}/local_paths.env"
 
 # ── Load default cluster paths (edit local_paths.env, not this file) ──────
@@ -158,7 +159,7 @@ META_PARTS=()
 
 if [[ -n "$SNP_BED" ]]; then
     mkdir -p "${OUTDIR}/prep_snp"
-    python3 "${BIN_DIR}/prep_regions.py" \
+    python3 "${SCRIPTS_DIR}/prep_regions.py" \
         --bed "${SNP_BED}" \
         --input_type snp \
         --fasta "${FASTA}" \
@@ -172,7 +173,7 @@ fi
 
 if [[ -n "$ENHANCER_BED" ]]; then
     mkdir -p "${OUTDIR}/prep_enhancer"
-    python3 "${BIN_DIR}/prep_regions.py" \
+    python3 "${SCRIPTS_DIR}/prep_regions.py" \
         --bed "${ENHANCER_BED}" \
         --input_type enhancer \
         --fasta "${FASTA}" \
@@ -215,7 +216,7 @@ ATAC_ARGS=()
 if [[ -n "$ATAC_NARROWPEAK" ]]; then
     ATAC_ARGS=(--atac_narrowpeak "$ATAC_NARROWPEAK")
 fi
-python3 "${BIN_DIR}/annotate.py" \
+python3 "${SCRIPTS_DIR}/annotate.py" \
     --scored_chunks "${OUTDIR}/scored.output" \
     --region_metadata "${OUTDIR}/regions.combined.metadata.tsv" \
     --blast_radius_bp "${BLAST_RADIUS_BP}" \
@@ -234,7 +235,7 @@ if [[ "$RUN_LAUNCH_DCAS9" -eq 1 ]]; then
     mkdir -p "${CHUNK_DIR}" "${ENH_RESULT_DIR}" "${PRO_RESULT_DIR}" "${LAUNCH_LOG_DIR}"
 
     echo "  -- splitting unique spacers into chunks --" >&2
-    python3 "${BIN_DIR}/launch_dcas9_split.py" \
+    python3 "${SCRIPTS_DIR}/launch_dcas9_split.py" \
         --annotated "${ANNOTATED_FOR_RANK}" \
         --chunk_size "${LAUNCH_CHUNK_SIZE}" \
         --outdir "${CHUNK_DIR}"
@@ -252,13 +253,13 @@ if [[ "$RUN_LAUNCH_DCAS9" -eq 1 ]]; then
     ENH_JOBID=$(sbatch "${SBATCH_FLAGS[@]}" \
         -o "${LAUNCH_LOG_DIR}/enhancer_%A_%a.log" \
         -e "${LAUNCH_LOG_DIR}/enhancer_%A_%a.err" \
-        --export=ALL,OUTCOME=enhancerFitness,CHUNK_DIR="${CHUNK_DIR}",RESULT_DIR="${ENH_RESULT_DIR}",LAUNCH_SCRIPT="${LAUNCH_SCRIPT}",CKPT_DIR="${LAUNCH_CKPT_DIR}",VENV_PYTHON="${LAUNCH_VENV_PYTHON}",WRAPPER_SCRIPT="${BIN_DIR}/launch_dcas9_score_chunk.py" \
+        --export=ALL,OUTCOME=enhancerFitness,CHUNK_DIR="${CHUNK_DIR}",RESULT_DIR="${ENH_RESULT_DIR}",LAUNCH_SCRIPT="${LAUNCH_SCRIPT}",CKPT_DIR="${LAUNCH_CKPT_DIR}",VENV_PYTHON="${LAUNCH_VENV_PYTHON}",WRAPPER_SCRIPT="${SCRIPTS_DIR}/launch_dcas9_score_chunk.py" \
         "${BIN_DIR}/launch_dcas9_array.sbatch")
 
     PRO_JOBID=$(sbatch "${SBATCH_FLAGS[@]}" \
         -o "${LAUNCH_LOG_DIR}/promoter_%A_%a.log" \
         -e "${LAUNCH_LOG_DIR}/promoter_%A_%a.err" \
-        --export=ALL,OUTCOME=promoterFitness,CHUNK_DIR="${CHUNK_DIR}",RESULT_DIR="${PRO_RESULT_DIR}",LAUNCH_SCRIPT="${LAUNCH_SCRIPT}",CKPT_DIR="${LAUNCH_CKPT_DIR}",VENV_PYTHON="${LAUNCH_VENV_PYTHON}",WRAPPER_SCRIPT="${BIN_DIR}/launch_dcas9_score_chunk.py" \
+        --export=ALL,OUTCOME=promoterFitness,CHUNK_DIR="${CHUNK_DIR}",RESULT_DIR="${PRO_RESULT_DIR}",LAUNCH_SCRIPT="${LAUNCH_SCRIPT}",CKPT_DIR="${LAUNCH_CKPT_DIR}",VENV_PYTHON="${LAUNCH_VENV_PYTHON}",WRAPPER_SCRIPT="${SCRIPTS_DIR}/launch_dcas9_score_chunk.py" \
         "${BIN_DIR}/launch_dcas9_array.sbatch")
 
     echo "  -- submitted enhancer job ${ENH_JOBID}, promoter job ${PRO_JOBID}; waiting --" >&2
@@ -292,7 +293,7 @@ if [[ "$RUN_LAUNCH_DCAS9" -eq 1 ]]; then
     fi
 
     echo "  -- merging scores onto guide table --" >&2
-    python3 "${BIN_DIR}/launch_dcas9_merge.py" \
+    python3 "${SCRIPTS_DIR}/launch_dcas9_merge.py" \
         --annotated "${ANNOTATED_FOR_RANK}" \
         --enhancer_dir "${ENH_RESULT_DIR}" \
         --promoter_dir "${PRO_RESULT_DIR}" \
@@ -302,7 +303,7 @@ if [[ "$RUN_LAUNCH_DCAS9" -eq 1 ]]; then
 fi
 
 echo "=== [${TOTAL_STEPS}/${TOTAL_STEPS}] Ranking (hard filters + weighted composite score) ===" >&2
-python3 "${BIN_DIR}/rank_report.py" \
+python3 "${SCRIPTS_DIR}/rank_report.py" \
     --annotated "${ANNOTATED_FOR_RANK}" \
     --max_mismatch "${MAX_MISMATCH}" \
     --out "${OUTDIR}/guides.ranked.tsv"

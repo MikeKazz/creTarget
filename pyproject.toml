@@ -45,3 +45,4 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "crispri_guide_designer.scripts" = ["*.py"]
+"crispri_guide_designer.checkpoints" = ["*.pth"]
