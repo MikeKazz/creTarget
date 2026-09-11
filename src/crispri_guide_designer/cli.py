@@ -331,7 +331,7 @@ def cmd_run(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="crispri-guide-designer")
+    parser = argparse.ArgumentParser(prog="cretarget")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_run = sub.add_parser("run", help="design, score, and rank guides")
