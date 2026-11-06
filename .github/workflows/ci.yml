@@ -220,6 +220,34 @@ jobs:
           print(f"OK: {len(df)} guides across {df['region_id'].nunique()} regions")
           EOF
 
+      - name: Verify the output is byte-identical across two independent runs
+        # Guards the collectFile ordering. `sort: true` ordered chunks by
+        # absolute path, which contains the random work-directory hash, so two
+        # identical runs produced byte-different output. Nothing was lost, but
+        # "same input, same output" is a claim this pipeline has to be able to
+        # make, so it is checked rather than assumed.
+        run: |
+          # Identical flags to the first run; only the work dir and outdir
+          # differ. Comparing runs with different --chunk_size would test
+          # something stronger than determinism and could fail for a
+          # legitimate reason.
+          nextflow run . -profile test,local -w work_det \
+            --snp_bed ci_snps.txt \
+            --enhancer_bed ci_enh.txt \
+            --fasta ci_ref/mini.fa \
+            --flashfry_jar FlashFry.jar \
+            --flashfry_db ci_ref/mini_cas9ngg_db \
+            --atac_narrowpeak ci_atac.narrowPeak \
+            --dedup_blast_radius \
+            --outdir results_det
+          if ! cmp -s results_ci/guides.ranked.tsv results_det/guides.ranked.tsv; then
+            echo "ERROR: two runs of the same input produced different output"
+            diff <(head -5 results_ci/guides.ranked.tsv) \
+                 <(head -5 results_det/guides.ranked.tsv) || true
+            exit 1
+          fi
+          echo "OK: output is reproducible across runs"
+
       - name: Verify -resume caches every task
         run: |
           nextflow run . -profile test,local -resume \

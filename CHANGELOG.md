@@ -75,6 +75,14 @@ breaking change to how the pipeline is invoked.
   engine and appeared reproducible. They now set `process.container` from
   `--container_image`, and the pipeline refuses to start with an engine
   enabled and no image.
+- **The collated output is now reproducible.** `collectFile(sort: true)`
+  ordered the per-chunk tables by absolute path, which contains each task's
+  random work-directory hash, so two identical runs concatenated the chunks in
+  different orders and produced byte-different output files. No rows were lost
+  and every row is self-labelled, but "same input, same output" is a claim the
+  pipeline has to be able to make. Chunks are now ordered by their numeric
+  index (zero-padded, so chunk 2 precedes chunk 10), and CI fails if two
+  independent runs of the same input differ.
 - **`-profile conda` now builds.** `assets/environment.yml` pip-installed
   `cretarget` from PyPI, where it is not yet published, so the profile failed
   for everyone. It installs from the GitHub repository until the PyPI release.

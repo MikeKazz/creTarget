@@ -123,7 +123,25 @@ workflow CRETARGET {
             storeDir: params.outdir,
             keepHeader: true,
             skip: 1,
-            sort: true
+            /*
+             * Sort by the chunk's numeric index, NOT by `sort: true`.
+             *
+             * `sort: true` orders by the Path's natural ordering, which is the
+             * absolute path -- and that contains the task's random work-directory
+             * hash. Two identical runs therefore concatenated the chunks in
+             * different orders and produced byte-different output files. No rows
+             * were lost and every row is self-labelled, but "same input, same
+             * output" is a claim this pipeline has to be able to make.
+             *
+             * Per-chunk files are named "<prefix>.<n>.ranked.tsv". Zero-padding
+             * the index makes the string order match the numeric order, so chunk
+             * 2 precedes chunk 10 rather than following chunk 1. The fallback
+             * also returns a String, so the comparator never mixes types.
+             */
+            sort: { f ->
+                def m = (f.name =~ /\.(\d+)\./)
+                m.find() ? String.format('%09d', m.group(1) as Integer) : f.name
+            }
         )
 
     //
