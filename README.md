@@ -1,194 +1,293 @@
 # creTarget
 
-Design, score, and rank CRISPRi guide RNAs for noncoding target regions
-(SNPs/points or enhancers/intervals) in hg38 — fast, at scale (validated at
-~464,000 guides in ~6 minutes, and genome-wide across all ENCODE cCREs via
-batch processing), with real off-target/on-target scoring via
-[FlashFry](https://github.com/mckennalab/FlashFry), optional CNN-based
+Design, score, and rank CRISPRi guide RNAs for noncoding target regions —
+SNPs/points or enhancers/intervals — in hg38, at any scale from a handful
+of targets to genome-wide.
+
+Off-target and on-target scoring comes from
+[FlashFry](https://github.com/mckennalab/FlashFry), with optional CNN-based
 enhancer/promoter efficacy scoring via
 [launch-dCas9](https://github.com/Wancen/launch-dCas9), optional ATAC-seq
 chromatin-accessibility annotation, and optional off-target/TSS-proximity
 screening via seed-finder-lite.
 
+Execution is handled by [Nextflow](https://nextflow.io), so the same command
+runs on your laptop, on SLURM, PBS/PBS Pro, SGE, or LSF — the scheduler is a
+`-profile` flag, not a code path.
+
 ## Features
 
-- **Two input types, flexible formats**: SNPs (`chr:pos`, 1-based, or legacy
-  BED) and enhancers (`chr:start-end`, or legacy BED) — auto-detected per
-  line, malformed lines skipped with a warning rather than aborting the run.
-- **Fast, memory-safe parallel execution**: FlashFry discover/score is
-  chunked and run in parallel, either locally (auto-sized to your CPU count
-  and available RAM) or as a SLURM array job.
-- **Real ranking**: hard filters (seed score, GC content, poly-T, multi-site
-  genomic match, FlashFry overflow) exclude bad guides; passing guides get a
-  weighted composite score (specificity, CFD, closest off-target distance,
-  RNA folding energy, and optionally launch-dCas9 on-target efficacy) and
-  are ranked per target.
-- **ATAC-seq integration**: pass your own narrowPeak file, or pick from 19
-  bundled hematopoietic cell types (auto-downloaded on first use) — adds
-  each guide's distance to the nearest accessible-chromatin peak summit.
-- **Off-target / TSS-proximity screening**: optional integration with the
-  external seed-finder-lite tool, adding per-guide summary columns
-  (hit count, closest off-target gene/distance) with full hit-level detail
-  preserved separately.
-- **Zero manual reference setup**: the hg38 FASTA and FlashFry index are
-  hosted on Zenodo and fetched with one command.
+- **Two input types, flexible formats.** SNPs (`chr:pos`, 1-based, or BED)
+  and enhancers (`chr:start-end`, or BED), auto-detected per line. Malformed
+  lines are skipped with a warning rather than aborting the run. Contigs are
+  validated against the reference up front, so an Ensembl-vs-UCSC naming
+  mismatch is reported in plain language instead of surfacing as a bedtools
+  error three steps later.
+- **Flat memory at any scale.** Region prep is the only global step;
+  everything after it — FlashFry, annotation, ranking, optional scoring — runs
+  per chunk with no cross-chunk synchronization. A 2-million-region run uses
+  the same memory per task as a 3,000-region run, only with more tasks.
+- **Scheduler-agnostic.** `-profile slurm`, `pbs`, `sge`, or `lsf`. Failed
+  tasks retry automatically with escalated memory and time; `-resume` picks up
+  where an interrupted run left off.
+- **Real ranking.** Hard filters (seed score, GC content, poly-T, multi-site
+  genomic match, FlashFry overflow) exclude bad guides. Passing guides get a
+  weighted composite score (specificity, CFD, closest off-target distance, RNA
+  folding energy, and optionally launch-dCas9 efficacy) and a per-target rank.
+- **Provenance by default.** Every output directory gets a `run_manifest.json`
+  (pipeline version, commit, full parameters, command line) and a
+  `software_versions.yml`.
+
+## Requirements
+
+- [Nextflow](https://nextflow.io) **≥ 24.04** — this is a hard floor, not a
+  suggestion: the pipeline uses `process.resourceLimits`, which earlier
+  versions ignore, so resource ceilings would silently not apply. Tested on
+  24.04, 25.10 and latest-stable in CI.
+- Java **17+** (Nextflow and FlashFry both need a modern JVM). Note that
+  Nextflow 23.x caps at Java 19, which is a second reason not to use it.
+- Python ≥ 3.10
+- `bedtools`, `samtools`
+- [FlashFry](https://github.com/mckennalab/FlashFry/releases) (a JVM tool;
+  download the assembly JAR separately)
+
+A GPU is not required. The core pipeline is CPU-only; a GPU only helps the
+optional `--run_launch_dcas9` step.
 
 ## Installation
 
-Requires Python ≥3.10, [FlashFry](https://github.com/mckennalab/FlashFry)
-(a JVM tool — needs Java), `bedtools`, and `samtools`.
-
 ```bash
-git clone git@github.com:MikeKazz/creTarget.git
-cd creTarget
-pip install -e .
+pip install cretarget
 ```
 
-**GPU**: not required for the core pipeline (FlashFry design/scoring, ranking, ATAC annotation, seed-finder-lite) -- all CPU-only. A GPU is only needed for the optional `--run-launch-dcas9` step.
+Or with conda, which also brings `bedtools`, `samtools`, and a JRE:
 
-**Cluster schedulers**: `--executor` currently supports `local` and SLURM only -- PBS and other schedulers aren't supported. On a non-SLURM cluster, use `--executor local` (optionally from inside your own PBS/etc. job script).
+```bash
+conda install -c conda-forge -c bioconda cretarget
+```
 
-(Once published to PyPI: `pip install creTarget`.)
+Check that everything is wired up:
+
+```bash
+cretarget doctor
+```
 
 ## First-time setup
 
 ```bash
-# 1. Download the hg38 reference + FlashFry index (~3.2GB total)
-cretarget setup-reference --outdir ~/.guidenet_reference
+# 1. Reference genome + FlashFry index (~3.2GB, Zenodo DOI 10.5281/zenodo.21115562)
+cretarget setup-reference
 
-# 2. Point the tool at it + your FlashFry install
-cretarget configure --set reference.fasta=~/.guidenet_reference/hg38.fa
+# 2. Record where things live (used by the step-level CLI; paths may use ~ and $VARS)
+cretarget configure --set reference.fasta=~/.cretarget/reference/hg38.fa
 cretarget configure --set reference.flashfry_jar=/path/to/FlashFry-assembly-1.15.jar
-cretarget configure --set reference.flashfry_db=~/.guidenet_reference/hg38_standard_cas9ngg_db
+cretarget configure --set reference.flashfry_db=~/.cretarget/reference/hg38_standard_cas9ngg_db
 ```
 
-Config lives at `~/.config/cretarget/config.toml` — set once,
-used automatically on every run after. FlashFry itself isn't hosted by this
-tool; download it separately from its
-[GitHub releases](https://github.com/mckennalab/FlashFry/releases).
-
-### Optional: launch-dCas9 (enhancer/promoter on-target scoring)
-
-Requires a separate conda environment with `torch` (see
-[launch-dCas9](https://github.com/Wancen/launch-dCas9)). Checkpoints ship in
-this repo (`checkpoints/`, ~1MB each) — no separate download.
-
-```bash
-cretarget configure --set launch_dcas9.venv_python=/path/to/conda/envs/launch-dCas9/bin/python
-cretarget configure --set launch_dcas9.script=/path/to/launch-dCas9.py
-```
-
-### Optional: seed-finder-lite (off-target / TSS-proximity screening)
-
-Requires a separate install (see
-[Zenodo DOI 10.5281/zenodo.21599135](https://doi.org/10.5281/zenodo.21599135)).
-
-```bash
-cretarget configure --set seed_finder.dir=/path/to/seed-finder-lite-main
-```
-
-### Optional: SLURM
-
-If running `--executor slurm`, set your cluster's resource defaults once:
-
-```bash
-cretarget configure --set slurm.partition=your_partition
-cretarget configure --set slurm.gres=gpu:1   # blank if no GPU needed
-cretarget configure --set slurm.mem=16G
-cretarget configure --set slurm.cpus=8
-cretarget configure --set slurm.time=2:00:00
-```
+> **Clusters without outbound network on compute nodes:** all downloads are
+> explicit, login-node commands that populate a cache directory. Pipeline steps
+> only read from that cache and never download. Point the cache somewhere
+> shared with `CRETARGET_CACHE_DIR=/shared/path/.cretarget`.
 
 ## Usage
 
 ```bash
-cretarget run \
-    --snp-bed snps.txt \
-    --enhancer-bed enhancers.txt \
-    --dedup-blast-radius \
+nextflow run MikeKazz/creTarget \
+    -profile slurm,conda \
+    --enhancer_bed enhancers.txt \
+    --snp_bed snps.txt \
+    --fasta ~/.cretarget/reference/hg38.fa \
+    --flashfry_jar /path/to/FlashFry-assembly-1.15.jar \
+    --flashfry_db ~/.cretarget/reference/hg38_standard_cas9ngg_db \
+    --dedup_blast_radius \
     --outdir results
 ```
 
-At least one of `--snp-bed` / `--enhancer-bed` is required; both may be
-given together. Input files accept either plain text (`chr:pos` per line for
-SNPs, `chr:start-end` per line for enhancers) or legacy tab-separated BED.
+At least one of `--snp_bed` / `--enhancer_bed` is required; both may be given
+together.
 
-Output: `results/guides.ranked.tsv` (or `results/guides.final.tsv` if
-`--run-seed-finder` is used) — one row per candidate guide, annotated with
-all FlashFry scores, genome coordinates, hard-filter results, and `rank`
-(1 = best, per target; `exclude (<reason>)` if it failed a filter).
+Output is `results/guides.ranked.tsv` (or `guides.final.tsv` with
+`--run_seed_finder`): one row per candidate guide, annotated with all FlashFry
+scores, genome coordinates, hard-filter results, and `rank` (1 = best, per
+target; `exclude (<reason>)` if it failed a filter).
 
 ### Common options
 
 | Flag | Default | Description |
 |---|---|---|
-| `--dedup-blast-radius` | off | Flag input targets within 1kb of each other (does not merge) |
-| `--blast-radius-bp` | 1000 | CRISPRi silencing window, bp |
-| `--flank-bp` | 50 | Enhancer-type: padding added around each interval |
-| `--snp-window-bp` | 150 | SNP-type: search window on each side of the point |
-| `--atac-narrowpeak` | none | ENCODE-standard narrowPeak file; adds `distance_to_atac_summit` column |
-| `--atac-cell-type` | none | Use a bundled hematopoietic cell type's ATAC data instead (auto-downloaded) |
-| `--run-launch-dcas9` | off | Add launch-dCas9 enhancer/promoter efficacy scoring |
-| `--run-seed-finder` | off | Add seed-finder-lite off-target/TSS-proximity summary columns |
-| `--seed-finder-min-length` | none | Required if `--run-seed-finder` is set; no default (your choice) |
-| `--seed-finder-tss-window` | none | Required if `--run-seed-finder` is set; no default (your choice) |
-| `--executor` | `local` | `local` or `slurm` |
-| `--n-workers` | auto | Parallel chunks; auto-sized by CPU count and available RAM if unset |
+| `--chunk_size` | 5000 | Regions per parallel task |
+| `--queue` | none | Partition/queue name, if your scheduler needs one |
+| `--gpu_gres` | none | GPU request for the launch-dCas9 step, e.g. `gpu:1` |
+| `--dedup_blast_radius` | off | Flag input targets within 1kb of each other (does not merge) |
+| `--blast_radius_bp` | 1000 | CRISPRi silencing window, bp |
+| `--flank_bp` | 50 | Enhancer-type: padding around each interval |
+| `--snp_window_bp` | 150 | SNP-type: search window each side of the point |
+| `--max_mismatch` | 3 | FlashFry off-target search depth |
+| `--atac_narrowpeak` | none | narrowPeak file; adds `distance_to_atac_summit` |
+| `--run_launch_dcas9` | off | Add launch-dCas9 efficacy scoring |
+| `--run_seed_finder` | off | Add seed-finder-lite off-target/TSS columns |
 
-Run `cretarget run --help` for the full list.
+Run `nextflow run MikeKazz/creTarget --help` for the full list.
+
+### Choosing a chunk size
+
+`--chunk_size` trades task count against per-task runtime. Smaller chunks
+parallelize better but add scheduling overhead; larger chunks are more
+efficient but slower to retry when one fails. The default of 5,000 regions is
+a reasonable starting point. On a busy cluster, prefer fewer, larger tasks; on
+an idle one, the reverse.
+
+Nextflow throttles concurrent submissions (`executor.queueSize`, default 50 in
+the cluster profiles) so that a genome-wide run does not put thousands of JVMs
+onto a shared filesystem simultaneously. Raise it if your site can take it.
+
+### Optional: launch-dCas9 on-target scoring
+
+Requires a separate conda environment with `torch` (see
+[launch-dCas9](https://github.com/Wancen/launch-dCas9)). Model checkpoints are
+fetched from Zenodo on demand rather than bundled:
+
+```bash
+cretarget fetch-models
+
+nextflow run MikeKazz/creTarget ... \
+    --run_launch_dcas9 \
+    --launch_script /path/to/launch-dCas9.py \
+    --launch_python /path/to/conda/envs/launch-dCas9/bin/python \
+    --ckpt_dir ~/.cretarget/models
+```
+
+### Optional: ATAC-seq annotation
+
+Supply your own narrowPeak file with `--atac_narrowpeak`, or fetch one of 19
+bundled hematopoietic cell types:
+
+```bash
+cretarget fetch-atac --cell-type k562
+nextflow run MikeKazz/creTarget ... --atac_narrowpeak ~/.cretarget/atac_peaks/k562.narrowPeak
+```
+
+### Optional: seed-finder-lite
+
+Requires a separate install (Zenodo DOI
+[10.5281/zenodo.21599135](https://doi.org/10.5281/zenodo.21599135)).
+
+```bash
+nextflow run MikeKazz/creTarget ... \
+    --run_seed_finder \
+    --seed_finder_dir /path/to/seed-finder-lite \
+    --seed_finder_min_length 8 \
+    --seed_finder_tss_window 1000
+```
+
+`--seed_finder_min_length` and `--seed_finder_tss_window` have no defaults on
+purpose: they change what the screen means, so choose them deliberately.
 
 ## How it works
 
-1. **Prep regions** — pad each target, extract sequence from hg38, encode
-   genome coordinates into FASTA headers.
-2. **FlashFry discover + score** — split into chunks, run in parallel
-   (local processes or SLURM array).
-3. **Annotate** — merge chunks, recover genome coordinates, flag guides
-   within the CRISPRi blast radius, compute ATAC summit distance if given.
-4. **launch-dCas9** *(optional)* — CNN-scored enhancer/promoter on-target
-   efficacy, same chunked parallel execution.
-5. **Rank** — hard filters exclude bad guides; passing guides get a
-   weighted composite score and a per-target rank.
-6. **seed-finder-lite** *(optional)* — off-target/TSS-proximity summary
-   columns appended, full hit-level detail preserved separately.
+1. **Prep regions** — parse and validate targets, flag linked neighbours, pad
+   each region, extract sequence, encode genome coordinates into FASTA headers.
+   *(global, once)*
+2. **Split** — divide regions into chunks of `--chunk_size`.
+3. **FlashFry discover + score** — per chunk, JVM heap derived from the task's
+   actual memory allocation.
+4. **Annotate** — recover genome coordinates, join region metadata, flag guides
+   within the blast radius, compute ATAC summit distance. *(per chunk)*
+5. **launch-dCas9** *(optional)* — CNN on-target efficacy. *(per chunk)*
+6. **Rank** — hard filters, weighted composite score, per-target rank.
+   *(per chunk)*
+7. **seed-finder-lite** *(optional)* — off-target/TSS summary columns.
+   *(per chunk)*
+8. **Collate** — stream per-chunk tables into one output file.
 
-## Performance
+Ranking is per-`region_id`, and every guide for a region lands in the same
+chunk, so per-chunk ranking is exactly equivalent to ranking globally. This is
+verified in CI: a chunked run produces byte-identical results to an unchunked
+one.
 
-Validated on a 40-core / 125GB node: 3,517 real enhancer regions (~464,000
-candidate guides) processed end-to-end in ~6 minutes — about 13× faster
-than unchunked, single-process execution, with parallelism auto-capped to
-stay within available memory. Also validated genome-wide across all ENCODE
-cCREs (~2.35M regions) via fixed-size batch processing (see
-`run_ccre_batches.sbatch`) to keep memory bounded on very large runs.
+## Step-level CLI
+
+`cretarget <step>` runs one step on one file — useful for debugging, for small
+one-off jobs, or for composing your own workflow:
+
+```bash
+cretarget prep-regions --enhancer-bed enhancers.txt --fasta hg38.fa --outdir prep
+cretarget annotate --scored scored.tsv --region-metadata prep/regions.metadata.tsv --out annotated.tsv
+cretarget rank --annotated annotated.tsv --out ranked.tsv
+cretarget doctor
+```
+
+These read defaults from `~/.config/cretarget/config.toml`. Nextflow always
+passes parameters explicitly and ignores that file.
 
 ## Repository layout
 
 ```
-src/crispri_guide_designer/
-  cli.py                     cretarget command (run / configure / setup-reference)
-  config.py                  ~/.config/cretarget/config.toml management
-  executor.py                 local-parallel and SLURM-array execution
-  flashfry_chunked.py         chunked FlashFry orchestration
-  atac_cache.py               bundled ATAC cell-type download/cache
-  seed_finder_integrate.py    seed-finder-lite integration
-  scripts/                     region prep, annotation, ranking, launch-dCas9 scoring
-checkpoints/                  launch-dCas9 pretrained weights (bundled, ~1MB each)
-test_data/                     small real-coordinate fixtures for smoke testing
-run_ccre_batches.sbatch        SLURM driver for genome-wide batch processing
-run_standalone.sh              bash-only alternative entry point (no pip install needed)
-inspect_repo.sh                pre-commit sanity checks (large files, stray artifacts, etc.)
+main.nf                     pipeline entrypoint
+nextflow.config             params, profiles (local/slurm/pbs/sge/lsf, conda/docker/singularity)
+conf/base.config            per-process resources and retry escalation
+conf/modules.config         publishing rules
+conf/limits.config          resource ceilings, applied last
+conf/site-template.config   commented blank to copy for a new cluster
+conf/boltzmann.config       filled-in worked example (single-node SLURM)
+conf/test.config            small-input smoke-test profile
+workflows/cretarget.nf      the workflow DAG
+modules/local/              one process per step
+src/cretarget/              the Python package (steps, config, asset fetching, doctor)
+tests/                      pytest suite
 ```
+
+## Running on your cluster
+
+The built-in profiles are generic. For most sites, this is all you need:
+
+```bash
+nextflow run MikeKazz/creTarget -profile slurm,conda \
+    --queue short --gpu_gres gpu:1 ...
+```
+
+`-profile` takes `local`, `slurm`, `pbs`, `sge` or `lsf` for execution, and
+`conda`, `docker`, `singularity` or `apptainer` for software. `--queue` and
+`--gpu_gres` cover the two things that vary most between sites. The container
+profiles additionally require `--container_image`; the pipeline refuses to
+start with a container engine enabled and no image, rather than silently
+running tasks against whatever tools happen to be on the host.
+
+A **site profile** is only needed when your cluster has constraints the
+scheduler cannot express — notably when it does *not* account for memory when
+placing jobs, does not enforce the memory it granted, or shares nodes with
+work it cannot see. `conf/site-template.config` is a commented blank to copy,
+and it lists the specific commands that answer each question.
+`conf/boltzmann.config` is a filled-in worked example (single-node SLURM,
+shared GPUs, no cgroup containment). Register your copy in the `profiles`
+block of `nextflow.config`, or keep it out of the repo and pass it with
+`-c /path/to/mysite.config`.
+
+`assets/inspect_boltzmann.sh` is a read-only survey script that reports
+everything a site profile needs. Despite the name it is not machine-specific —
+edit the two paths at the top and run it anywhere.
+
+On a **single-node cluster** in particular, submit the Nextflow driver job
+with *minimal* resources (1 CPU, a few GB). The driver only waits; every
+resource it holds is one the actual work cannot have.
+`assets/run_cretarget.sbatch` is a worked driver template, including the
+`source conda.sh` step that batch jobs need because `conda activate` does not
+work in a non-interactive shell.
 
 ## Known limitations
 
-- FlashFry (JVM), launch-dCas9 (conda/torch), and seed-finder-lite are
-  external dependencies, not bundled — `pip install` gets you the
-  orchestration tool, not those.
-- `--executor slurm` is fully validated: real job submission, `squeue` polling, and
-  `sacct`-based exit-code verification confirmed end-to-end (including deliberately
-  tested failure-detection logic for segfaulted/OOM/timed-out tasks).
-- ATAC distance is computed and reported but not yet part of the ranking
-  formula.
+- FlashFry (JVM), launch-dCas9 (conda/torch), and seed-finder-lite are external
+  dependencies, not bundled.
+- ATAC distance is computed and reported but is not part of the ranking formula.
+- hg38 is the tested reference. Other genomes should work given a matching
+  FlashFry index, but are not validated.
+
+## Citation
+
+If you use creTarget, please cite it (see `CITATION.cff`) along with
+[FlashFry](https://github.com/mckennalab/FlashFry), and — if you use
+`--run_launch_dcas9` — [launch-dCas9](https://github.com/Wancen/launch-dCas9),
+whose pretrained weights this tool redistributes via Zenodo.
 
 ## License
 

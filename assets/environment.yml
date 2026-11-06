@@ -1,0 +1,23 @@
+# Conda environment for `-profile conda`.
+#
+# Channel order is conda-forge BEFORE bioconda, which is what bioconda itself
+# requires. This overrides whatever order a user's ~/.condarc happens to have
+# (a bioconda-first .condarc with strict priority is a common cause of broken
+# samtools/htslib solves).
+name: cretarget
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python>=3.10
+  - pandas>=1.5
+  - numpy>=1.23
+  - bedtools>=2.30
+  - samtools>=1.13
+  - openjdk>=17          # Nextflow >=24.04 and FlashFry both want a modern JVM
+  - pip
+  - pip:
+      # Installed from the tagged release rather than PyPI: creTarget is not
+      # published there yet, and a bare `- cretarget` makes this whole profile
+      # fail to build. Switch to `- cretarget==<version>` once it is on PyPI.
+      - git+https://github.com/MikeKazz/creTarget.git@main

@@ -1,0 +1,45 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "creTarget: CRISPRi guide RNA design for the noncoding genome"
+abstract: >-
+  creTarget designs, scores, and ranks CRISPRi guide RNAs for noncoding
+  target regions (SNPs and enhancers) in hg38. It combines FlashFry
+  off-target and on-target scoring with optional CNN-based efficacy
+  prediction, ATAC-seq accessibility annotation, and TSS-proximity
+  screening, and scales from single targets to genome-wide libraries via
+  Nextflow.
+type: software
+authors:
+  - family-names: Kazemi
+    given-names: Mehrdad
+version: 0.2.0
+license: MIT
+repository-code: "https://github.com/MikeKazz/creTarget"
+url: "https://github.com/MikeKazz/creTarget"
+keywords:
+  - CRISPRi
+  - guide RNA design
+  - noncoding genome
+  - enhancers
+  - functional genomics
+  - bioinformatics
+references:
+  - type: software
+    title: FlashFry
+    authors:
+      - family-names: McKenna
+        given-names: Aaron
+      - family-names: Shendure
+        given-names: Jay
+    repository-code: "https://github.com/mckennalab/FlashFry"
+    notes: "Used for CRISPR target discovery and on/off-target scoring."
+  - type: software
+    title: launch-dCas9
+    authors:
+      - family-names: Zhou
+        given-names: Wancen
+    repository-code: "https://github.com/Wancen/launch-dCas9"
+    notes: >-
+      Optional CNN-based enhancer/promoter efficacy scoring. Pretrained
+      weights are redistributed via Zenodo (10.5281/zenodo.22729308) with
+      attribution; they remain the work of the launch-dCas9 authors.

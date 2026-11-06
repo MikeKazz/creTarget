@@ -1,0 +1,246 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+
+  pytest:
+    name: pytest (python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install bedtools and samtools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bedtools samtools
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run tests
+        run: pytest tests/ -v
+
+      - name: Check the CLI starts
+        run: |
+          cretarget --version
+          cretarget --help
+
+  build:
+    name: build distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          twine check dist/*
+
+      - name: Assert model checkpoints are NOT bundled
+        # The launch-dCas9 weights are third-party and are fetched from Zenodo
+        # at runtime. If a .pth ever creeps back into the distribution, that is
+        # a licensing problem, so fail the build loudly.
+        run: |
+          if unzip -l dist/*.whl | grep -q '\.pth'; then
+            echo "ERROR: a .pth checkpoint is bundled in the wheel"
+            unzip -l dist/*.whl | grep '\.pth'
+            exit 1
+          fi
+          if tar -tzf dist/*.tar.gz | grep -q '\.pth'; then
+            echo "ERROR: a .pth checkpoint is bundled in the sdist"
+            exit 1
+          fi
+          echo "OK: no checkpoints in the distribution"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distribution
+          path: dist/
+
+  nextflow:
+    name: nextflow smoke test (${{ matrix.nxf_version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Oldest SUPPORTED (24.04 is where process.resourceLimits landed),
+        # a current production version, and latest -- the config/script
+        # parser has tightened considerably across this range.
+        nxf_version: ["24.04.4", "25.10.3", "latest-stable"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install bedtools and samtools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bedtools samtools
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Install Nextflow
+        uses: nf-core/setup-nextflow@v2
+        with:
+          version: "${{ matrix.nxf_version }}"
+
+      - name: Cache FlashFry
+        id: cache-flashfry
+        uses: actions/cache@v4
+        with:
+          path: FlashFry.jar
+          key: flashfry-1.15
+
+      - name: Download FlashFry
+        if: steps.cache-flashfry.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o FlashFry.jar \
+            https://github.com/mckennalab/FlashFry/releases/download/1.15/FlashFry-assembly-1.15.jar
+
+      - name: Build a synthetic mini-genome and FlashFry index
+        # A real reference is 3.2GB; the pipeline logic does not care how big
+        # the genome is, so CI builds a tiny one and indexes it for real.
+        run: |
+          mkdir -p ci_ref ci_ref/tmp
+          python - <<'EOF'
+          import random
+          random.seed(7)
+          with open("ci_ref/mini.fa", "w") as f:
+              for chrom, length in [("chr1", 200000), ("chr2", 120000)]:
+                  seq = "".join(random.choice("ACGT") for _ in range(length))
+                  f.write(f">{chrom}\n")
+                  for i in range(0, length, 60):
+                      f.write(seq[i:i+60] + "\n")
+          EOF
+          samtools faidx ci_ref/mini.fa
+          java -Xmx4g -jar FlashFry.jar index \
+            --tmpLocation ci_ref/tmp \
+            --database ci_ref/mini_cas9ngg_db \
+            --reference ci_ref/mini.fa \
+            --enzyme spcas9ngg
+
+      - name: Build test inputs
+        run: |
+          printf 'chr1:10000-10400\nchr1:10600-11000\nchr1:50000-50300\nchr2:20000-20500\n' > ci_enh.txt
+          printf 'chr1:120000\nchr2:60000\n' > ci_snps.txt
+          python - <<'EOF'
+          import random
+          random.seed(3)
+          with open("ci_atac.narrowPeak", "w") as f:
+              for chrom, n, maxp in [("chr1", 40, 200000), ("chr2", 20, 120000)]:
+                  for i in range(n):
+                      s = random.randrange(0, maxp - 500)
+                      f.write(f"{chrom}\t{s}\t{s+400}\tpeak{i}\t500\t.\t5.5\t3.1\t2.0\t{200 if i%5 else -1}\n")
+          EOF
+
+      - name: Run the pipeline
+        run: |
+          nextflow run . -profile test,local \
+            --snp_bed ci_snps.txt \
+            --enhancer_bed ci_enh.txt \
+            --fasta ci_ref/mini.fa \
+            --flashfry_jar FlashFry.jar \
+            --flashfry_db ci_ref/mini_cas9ngg_db \
+            --atac_narrowpeak ci_atac.narrowPeak \
+            --dedup_blast_radius \
+            --outdir results_ci
+
+      - name: Verify the outputs
+        run: |
+          python - <<'EOF'
+          import sys
+          import pandas as pd
+
+          df = pd.read_csv("results_ci/guides.ranked.tsv", sep="\t")
+          problems = []
+
+          if df.empty:
+              problems.append("no guides in output")
+          # One header only: collectFile must not have concatenated them all.
+          with open("results_ci/guides.ranked.tsv") as fh:
+              if sum(1 for line in fh if line.startswith("contig\t")) != 1:
+                  problems.append("repeated header rows in collated output")
+          for column in ("region_id", "genome_start", "composite_score", "rank",
+                         "spacer", "distance_to_atac_summit"):
+              if column not in df.columns:
+                  problems.append(f"missing column: {column}")
+          if df["region_id"].nunique() < 6:
+              problems.append(f"expected >=6 regions, got {df['region_id'].nunique()}")
+          if not df["target_ref"].notna().all():
+              problems.append("some guides did not join to region metadata")
+
+          for path in ("results_ci/run_manifest.json",
+                       "results_ci/software_versions.yml"):
+              try:
+                  open(path).close()
+              except OSError:
+                  problems.append(f"missing provenance file: {path}")
+
+          if problems:
+              print("FAILED:")
+              for p in problems:
+                  print("  -", p)
+              sys.exit(1)
+          print(f"OK: {len(df)} guides across {df['region_id'].nunique()} regions")
+          EOF
+
+      - name: Verify -resume caches every task
+        run: |
+          nextflow run . -profile test,local -resume \
+            --snp_bed ci_snps.txt \
+            --enhancer_bed ci_enh.txt \
+            --fasta ci_ref/mini.fa \
+            --flashfry_jar FlashFry.jar \
+            --flashfry_db ci_ref/mini_cas9ngg_db \
+            --atac_narrowpeak ci_atac.narrowPeak \
+            --dedup_blast_radius \
+            --outdir results_ci 2>&1 | tee resume.log
+          if ! grep -q "cached" resume.log; then
+            echo "ERROR: -resume did not reuse any cached tasks"
+            exit 1
+          fi
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextflow-logs-${{ matrix.nxf_version }}
+          path: |
+            .nextflow.log
+            results_ci/pipeline_info/

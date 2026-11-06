@@ -1,24 +1,24 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "creTarget"
-version = "0.1.0"
-description = "Design and rank CRISPRi guide RNAs for SNP/point or enhancer/interval target regions (hg38)"
+name = "cretarget"
+version = "0.2.0"
+description = "Design, score, and rank CRISPRi guide RNAs for noncoding target regions (SNPs/enhancers, hg38)"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Mehrdad Kazemi" }
 ]
-keywords = ["crispri", "crispr", "guide-rna", "genome-editing", "bioinformatics", "flashfry"]
+keywords = ["crispri", "crispr", "guide-rna", "genome-editing", "bioinformatics", "flashfry", "nextflow"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
@@ -26,23 +26,23 @@ classifiers = [
 ]
 dependencies = [
     "pandas>=1.5",
-    "psutil>=5.9",
+    "numpy>=1.23",
     "tomli>=2.0; python_version < '3.11'",
 ]
 
 [project.urls]
 Homepage = "https://github.com/MikeKazz/creTarget"
 Repository = "https://github.com/MikeKazz/creTarget"
+Issues = "https://github.com/MikeKazz/creTarget/issues"
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest>=7", "build", "twine"]
 
 [project.scripts]
-cretarget = "crispri_guide_designer.cli:main"
+cretarget = "cretarget.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.setuptools.package-data]
-"crispri_guide_designer.scripts" = ["*.py"]
-"crispri_guide_designer.checkpoints" = ["*.pth"]
+[tool.pytest.ini_options]
+testpaths = ["tests"]
