@@ -17,7 +17,13 @@ dependencies:
   - openjdk>=17          # Nextflow >=24.04 and FlashFry both want a modern JVM
   - pip
   - pip:
-      # Installed from the tagged release rather than PyPI: creTarget is not
-      # published there yet, and a bare `- cretarget` makes this whole profile
-      # fail to build. Switch to `- cretarget==<version>` once it is on PyPI.
+      # Installed from GitHub, not PyPI. PyPI is not required for this
+      # pipeline -- a git install works everywhere pip does.
+      #
+      # IMPORTANT: `@main` is NOT reproducible; main moves. Before any run
+      # whose results you intend to publish, pin this to a tag:
+      #     - git+https://github.com/MikeKazz/creTarget.git@v0.2.0
+      # A pinned tag (or a container image) is what makes a run repeatable
+      # years later. Publishing to PyPI would let this read
+      # `- cretarget==0.2.0`, which is tidier but no more reproducible.
       - git+https://github.com/MikeKazz/creTarget.git@main
