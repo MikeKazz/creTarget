@@ -23,12 +23,42 @@ process RUN_MANIFEST {
     path "software_versions.yml", emit: software_versions
 
     script:
+    /*
+     * workflow.commitId is only populated when Nextflow itself manages the
+     * repository (`nextflow run owner/repo`). Running from a local clone --
+     * which is what most people do while developing, and what produced a
+     * `commit_id: n/a` in the first full run's manifest -- leaves it null, so
+     * the manifest could not identify the code that produced the results.
+     *
+     * Fall back to asking git directly about projectDir, and record whether
+     * the tree was dirty: a commit hash alone is misleading if the run used
+     * uncommitted edits.
+     */
+    def gitInfo = { ->
+        def out = [revision: null, dirty: null]
+        try {
+            def rev = ["git", "-C", "${projectDir}", "rev-parse", "HEAD"].execute()
+            rev.waitFor()
+            if (rev.exitValue() == 0) {
+                out.revision = rev.text.trim()
+                def st = ["git", "-C", "${projectDir}", "status", "--porcelain"].execute()
+                st.waitFor()
+                out.dirty = (st.exitValue() == 0) ? !st.text.trim().isEmpty() : null
+            }
+        } catch (Exception e) {
+            // not a git checkout, or no git on PATH -- leave both null
+        }
+        return out
+    }()
+
     def manifest_json = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([
         pipeline: [
             name     : workflow.manifest.name,
             version  : workflow.manifest.version,
             revision : workflow.revision ?: 'local',
-            commit_id: workflow.commitId ?: 'n/a',
+            commit_id: workflow.commitId ?: gitInfo.revision ?: 'unknown',
+            commit_source: workflow.commitId ? 'nextflow' : (gitInfo.revision ? 'git(projectDir)' : 'none'),
+            uncommitted_changes: gitInfo.dirty,
             home_page: workflow.manifest.homePage,
         ],
         run: [

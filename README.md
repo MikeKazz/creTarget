@@ -274,6 +274,31 @@ resource it holds is one the actual work cannot have.
 `source conda.sh` step that batch jobs need because `conda activate` does not
 work in a non-interactive shell.
 
+## Measured performance
+
+A full ENCODE cCRE run, on a single node (20 physical cores / 40 threads,
+125 GB RAM, NFS storage) under SLURM:
+
+| | |
+|---|---|
+| input | 2,348,854 cCREs (GRCh38, all classes) |
+| wall time | ~24 h |
+| guides produced | 92,519,254 |
+| regions with >=1 usable guide | 2,337,508 (99.52%) |
+| guides per region | min 1, max 205, mean 39.4 |
+| passing hard filters | 67,850,895 (73.3%) |
+| output table | 50 GB (~10 GB gzipped) |
+| scheduler jobs | 7,049, zero failures or retries |
+| peak memory per task | 2.7 GB (FlashFry), 5.2 GB (region prep) |
+
+Configuration: `chunk_size 1000`, 10 concurrent FlashFry tasks at 6 GB each.
+FlashFry runtime is superlinear in regions per chunk (measured T ~ n^1.32), so
+smaller chunks are faster -- 5,000 regions per chunk costs 48 min against 6.1
+min for 1,000. Concurrency, not chunk size, is the main throughput lever.
+
+Scaling is close to linear in region count, so a 10,000-region design takes
+minutes rather than hours.
+
 ## Known limitations
 
 - FlashFry (JVM), launch-dCas9 (conda/torch), and seed-finder-lite are external
