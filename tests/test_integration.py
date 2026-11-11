@@ -222,7 +222,11 @@ class TestRank:
 
     def test_reports_max_possible_without_launch_dcas9(self, ranked):
         df = pd.read_csv(ranked, sep="\t")
-        assert (df["composite_score_max_possible"] == 0.58).all()
+        # Compared with a tolerance, not ==. These values survive a CSV
+        # round-trip, and exact float equality on a value that is a sum of
+        # binary floats is fragile across pandas versions -- it passed on
+        # pandas 3.x and failed on 2.x for identical inputs.
+        assert df["composite_score_max_possible"].to_numpy() == pytest.approx(0.58)
         assert (df["composite_score"] <= 0.58 + 1e-9).all()
 
     def test_normalized_score_is_on_unit_scale(self, ranked):

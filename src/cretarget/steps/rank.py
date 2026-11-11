@@ -44,8 +44,12 @@ WEIGHTS = {
     "closest_distance": 0.05,
     "folding": 0.02,
 }
-MAX_WITHOUT_LAUNCH = sum(v for k, v in WEIGHTS.items() if k != "launch_enhancer")
-MAX_WITH_LAUNCH = sum(WEIGHTS.values())
+# Rounded because these are reported verbatim in an output column. Summing
+# binary floats can leave noise (0.5800000000000001), which both looks wrong in
+# a published table and makes exact comparison against the intended value fail.
+# The weights are percentages to two decimals, so 6 places is lossless here.
+MAX_WITHOUT_LAUNCH = round(sum(v for k, v in WEIGHTS.items() if k != "launch_enhancer"), 6)
+MAX_WITH_LAUNCH = round(sum(WEIGHTS.values()), 6)
 
 # Order matters: the first failing check is the one reported.
 FILTER_ORDER = [
