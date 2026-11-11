@@ -117,14 +117,23 @@ jobs:
 
       - name: Install Nextflow
         # Installed directly rather than via a third-party action, so the only
-        # external dependency is the Nextflow release asset itself. The asset
-        # name is `nextflow-<version>-dist` (verified; `-all` returns 404).
+        # external dependency is the Nextflow release asset itself.
+        #
+        # The asset name CHANGED mid-series, which is what broke an earlier
+        # attempt here (verified against the releases API):
+        #   23.04.0 / 24.04.4 -> nextflow-<ver>-all   (-dist is 404)
+        #   25.10.3           -> nextflow-<ver>-dist  (-all  is 404)
+        # Hence the fallback. Both are self-contained, so unlike the small
+        # launcher from get.nextflow.io they need no dependency resolution at
+        # first run.
         run: |
-          if [ "${{ matrix.nxf_version }}" = "latest-stable" ]; then
+          V="${{ matrix.nxf_version }}"
+          if [ "$V" = "latest-stable" ]; then
             curl -s https://get.nextflow.io | bash
           else
-            curl -fsSL -o nextflow \
-              "https://github.com/nextflow-io/nextflow/releases/download/v${{ matrix.nxf_version }}/nextflow-${{ matrix.nxf_version }}-dist"
+            BASE="https://github.com/nextflow-io/nextflow/releases/download/v$V"
+            curl -fsSL -o nextflow "$BASE/nextflow-$V-dist" \
+              || curl -fsSL -o nextflow "$BASE/nextflow-$V-all"
             chmod +x nextflow
           fi
           sudo mv nextflow /usr/local/bin/nextflow
