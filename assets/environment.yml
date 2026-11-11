@@ -1,20 +1,35 @@
 # Conda environment for `-profile conda`.
 #
+# VERSIONS ARE PINNED ON PURPOSE, for two reasons:
+#
+# 1. Correctness. Unpinned, this file resolved to python 3.15 / pandas 3.1 /
+#    numpy 2.5 -- none of which creTarget has ever been tested against, and
+#    pandas 3.x has breaking API changes. The pins below are the versions the
+#    test suite and the published benchmark actually ran on.
+#
+# 2. Solve time. Unpinned, conda's classic solver (still the default in conda
+#    <23.10 without conda-libmamba-solver) can take an hour or effectively
+#    hang on this dependency set. Pinned, the same solve takes seconds.
+#    If it is still slow for you, pass --conda_frontend micromamba.
+#
 # Channel order is conda-forge BEFORE bioconda, which is what bioconda itself
-# requires. This overrides whatever order a user's ~/.condarc happens to have
-# (a bioconda-first .condarc with strict priority is a common cause of broken
-# samtools/htslib solves).
+# requires. A bioconda-first ~/.condarc with strict priority is a common cause
+# of broken htslib/samtools solves; declaring the order here avoids it.
 name: cretarget
 channels:
   - conda-forge
   - bioconda
 dependencies:
-  - python>=3.10
-  - pandas>=1.5
-  - numpy>=1.23
-  - bedtools>=2.30
-  - samtools>=1.13
-  - openjdk>=17          # Nextflow >=24.04 and FlashFry both want a modern JVM
+  - python=3.12
+  - pandas=2.2
+  - numpy=1.26
+  - bedtools=2.31
+  - samtools=1.21
+  # Nextflow itself requires Java 17+, so anyone running this pipeline already
+  # has a JVM -- but pinning one here keeps the task environment self-contained
+  # on clusters where the compute nodes differ from the submit host. It is the
+  # single largest thing in the environment (~174 MB, and it pulls X11 libs).
+  - openjdk=17
   - pip
   - pip:
       # Installed from GitHub, not PyPI. PyPI is not required for this
@@ -23,7 +38,4 @@ dependencies:
       # IMPORTANT: `@main` is NOT reproducible; main moves. Before any run
       # whose results you intend to publish, pin this to a tag:
       #     - git+https://github.com/MikeKazz/creTarget.git@v0.2.0
-      # A pinned tag (or a container image) is what makes a run repeatable
-      # years later. Publishing to PyPI would let this read
-      # `- cretarget==0.2.0`, which is tidier but no more reproducible.
       - git+https://github.com/MikeKazz/creTarget.git@main
