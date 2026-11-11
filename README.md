@@ -247,7 +247,20 @@ nextflow run MikeKazz/creTarget -profile slurm,conda \
 ```
 
 `-profile` takes `local`, `slurm`, `pbs`, `sge` or `lsf` for execution, and
-`conda`, `docker`, `singularity` or `apptainer` for software. `--queue` and
+`conda`, `mamba`, `micromamba`, `docker`, `singularity` or `apptainer` for
+software.
+
+**The container is the most portable option** -- one image, no dependency
+solve, no version skew between users:
+
+```bash
+nextflow run MikeKazz/creTarget -r v0.2.0 -profile slurm,singularity ...
+```
+
+It defaults to `ghcr.io/mikekazz/cretarget:0.2.0`; override with
+`--container_image`. The `conda` profile builds the same pinned environment
+from `assets/environment.yml` instead; if conda's solver is slow, use
+`-profile micromamba` (same environment, a solver that handles it in seconds). `--queue` and
 `--gpu_gres` cover the two things that vary most between sites. The container
 profiles additionally require `--container_image`; the pipeline refuses to
 start with a container engine enabled and no image, rather than silently

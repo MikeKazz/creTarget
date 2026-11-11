@@ -116,9 +116,19 @@ jobs:
           pip install -e .
 
       - name: Install Nextflow
-        uses: nf-core/setup-nextflow@v2
-        with:
-          version: "${{ matrix.nxf_version }}"
+        # Installed directly rather than via a third-party action, so the only
+        # external dependency is the Nextflow release asset itself. The asset
+        # name is `nextflow-<version>-dist` (verified; `-all` returns 404).
+        run: |
+          if [ "${{ matrix.nxf_version }}" = "latest-stable" ]; then
+            curl -s https://get.nextflow.io | bash
+          else
+            curl -fsSL -o nextflow \
+              "https://github.com/nextflow-io/nextflow/releases/download/v${{ matrix.nxf_version }}/nextflow-${{ matrix.nxf_version }}-dist"
+            chmod +x nextflow
+          fi
+          sudo mv nextflow /usr/local/bin/nextflow
+          nextflow -version
 
       - name: Cache FlashFry
         id: cache-flashfry
