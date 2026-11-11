@@ -12,7 +12,7 @@ type: software
 authors:
   - family-names: Kazemi
     given-names: Mehrdad
-version: 0.2.0
+version: 0.2.1
 license: MIT
 repository-code: "https://github.com/MikeKazz/creTarget"
 url: "https://github.com/MikeKazz/creTarget"

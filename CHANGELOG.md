@@ -4,7 +4,56 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0] - Unreleased
+## [0.2.1]
+
+Release engineering and fixes found while validating the first public release.
+No change to pipeline results.
+
+### Added
+- `bump_version.sh`: sets the release version in all nine places it appears
+  across six files and verifies they agree. Version drift between
+  `pyproject.toml`, the container tag and the conda environment's install URL
+  is otherwise an easy mistake to ship.
+- Published container image `ghcr.io/mikekazz/cretarget`, now the default for
+  the `docker`/`singularity`/`apptainer` profiles, so `-profile singularity`
+  needs no extra flags.
+- `mamba` and `micromamba` profiles: the same pinned environment, solved in
+  seconds rather than the many minutes conda's classic solver can take.
+  Implemented as profiles rather than a parameter because a profile that reads
+  `params.X` sees whatever X was when the profile block was parsed.
+
+### Fixed
+- **`-profile conda` could not build.** `assets/environment.yml` installed
+  creTarget with `git+https://`, which needs the git binary, network AND
+  working git credentials on whatever node builds the environment; pip runs the
+  clone with `GIT_TERMINAL_PROMPT=0`, so a stale credential helper turned a
+  public repo into "Authentication failed / Repository not found". It now
+  installs from the release tarball over plain HTTPS -- no git, no auth, and
+  immutable because it is pinned to a tag.
+- **Unpinned conda environment installed untested versions.** Left unpinned it
+  resolved to python 3.15 / pandas 3.1 / numpy 2.5, none of which this tool has
+  been tested against, and pandas 3.x has breaking API changes. Versions are
+  now pinned to the ones the test suite and published benchmark ran on, which
+  also cuts the solve from an hour (or an apparent hang) to seconds. A 60-minute
+  `conda.createTimeout` means a slow solve now fails with a clear error instead
+  of hanging silently.
+- CI could not install Nextflow: the release asset was renamed mid-series
+  (`nextflow-<v>-all` through 24.04, `-dist` from 25.10), so a hardcoded name
+  404s for half the matrix. It now tries one and falls back to the other.
+- A test compared a CSV-round-tripped float with `==`, which passed on
+  pandas 3.x and failed on the pandas 2.x that CI resolves for Python 3.10.
+  Now compared with a tolerance, and `composite_score_max_possible` is rounded
+  at the source so the published column cannot carry float noise.
+- The run manifest recorded `commit_id: n/a` whenever the pipeline ran from a
+  local clone, because `workflow.commitId` is only set when Nextflow manages
+  the repository itself. It now falls back to `git rev-parse` on `projectDir`
+  and also records whether the working tree was dirty -- a commit hash is
+  misleading if the run used uncommitted edits.
+- `PREP_REGIONS` memory raised to 12 GB. An earlier in-process measurement said
+  2.22 GB, but it instrumented only the Python functions and missed the
+  `bedtools getfasta` child process; the real figure at full scale is 5.20 GB.
+
+## [0.2.0]
 
 Execution moved from a hand-written SLURM layer to Nextflow. This is a
 breaking change to how the pipeline is invoked.

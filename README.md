@@ -254,10 +254,10 @@ software.
 solve, no version skew between users:
 
 ```bash
-nextflow run MikeKazz/creTarget -r v0.2.0 -profile slurm,singularity ...
+nextflow run MikeKazz/creTarget -r v0.2.1 -profile slurm,singularity ...
 ```
 
-It defaults to `ghcr.io/mikekazz/cretarget:0.2.0`; override with
+It defaults to `ghcr.io/mikekazz/cretarget:0.2.1`; override with
 `--container_image`. The `conda` profile builds the same pinned environment
 from `assets/environment.yml` instead; if conda's solver is slow, use
 `-profile micromamba` (same environment, a solver that handles it in seconds). `--queue` and
