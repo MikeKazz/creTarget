@@ -4,6 +4,28 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5]
+
+### Added
+- **Startup banner.** `cretarget` and `nextflow run` both open with the
+  project wordmark and a schematic of a guide bound to DNA. In the CLI it is
+  written to stderr, never stdout, so redirecting a step's output to a file
+  stays safe; and it is printed only when stderr is a terminal, because a
+  genome-wide run has thousands of tasks and a banner in every
+  `.command.err` is noise rather than branding. `CRETARGET_NO_BANNER=1`
+  suppresses it outright, and colour follows the
+  [NO_COLOR](https://no-color.org) convention — disabled by the variable's
+  presence, whatever its value.
+
+### Fixed
+- **`conf/example-singlenode.config` built an invalid SLURM request when no
+  GPU was asked for.** `clusterOptions = "--gres=${params.gpu_gres}"` was
+  unguarded, so running `--run_launch_dcas9` without `--gpu_gres` submitted
+  the literal string `--gres=null`, which SLURM rejects. The generic `slurm`
+  profile has always guarded this; the guard was lost when the site-specific
+  config was genericized for 0.2.4. Without a GPU request the CNN now falls
+  back to CPU, which is slower but works.
+
 ## [0.2.4]
 
 No functional changes. The pipeline, its results and its dependencies are

@@ -45,4 +45,4 @@ dependencies:
       # apart got different code; a tag tarball cannot change.
       #
       # Bump this URL whenever you cut a new tag.
-      - https://github.com/MikeKazz/creTarget/archive/refs/tags/v0.2.4.tar.gz
+      - https://github.com/MikeKazz/creTarget/archive/refs/tags/v0.2.5.tar.gz

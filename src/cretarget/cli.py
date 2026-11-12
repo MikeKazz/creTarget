@@ -21,6 +21,7 @@ import argparse
 import sys
 
 from . import __version__
+from . import banner as banner_mod
 from . import config as cfg
 from . import doctor as doctor_mod
 from . import fetch
@@ -186,6 +187,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None):
+    # Before parsing, so it is shown above a usage error too. It writes to
+    # stderr and only when that is a terminal, so it cannot contaminate piped
+    # output or the per-task logs of a pipeline run.
+    banner_mod.print_banner()
     parser = build_parser()
     args = parser.parse_args(argv)
     args.func(args)

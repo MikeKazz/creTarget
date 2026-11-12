@@ -144,7 +144,28 @@ workflow {
         System.exit(0)
     }
 
+    /*
+     * Every backslash in the wordmark is doubled: Groovy processes escape
+     * sequences even inside single-quoted strings, so a lone backslash is a
+     * compile error. Nextflow's strict syntax has no slashy-string form that
+     * would avoid this.
+     */
+    log.info '\n' + [
+        '                ______                      __ ',
+        '  _____________/_  __/___ __________ ____  / /_',
+        ' / ___/ ___/ _ \\/ / / __ `/ ___/ __ `/ _ \\/ __/',
+        '/ /__/ /  /  __/ / / /_/ / /  / /_/ /  __/ /_  ',
+        '\\___/_/   \\___/_/  \\__,_/_/   \\__, /\\___/\\__/  ',
+        '                             /____/            ',
+        '',
+        '      .-------.    ',
+        '     /         v   ',
+        ' ---o-------- [##]-   noncoding CRISPRi guide design',
+        '',
+    ].join('\n')
+
     validateParams()
+
 
     log.info """
     ================================================================
