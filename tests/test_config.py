@@ -102,14 +102,30 @@ class TestSetValues:
 
 
 class TestCacheDir:
-    def test_prefers_configured_value(self, cfg, monkeypatch):
+    """Resolution order: $CRETARGET_CACHE_DIR -> [cache].dir -> ~/.cretarget"""
+
+    def test_environment_overrides_the_config_file(self, cfg, monkeypatch):
+        # Regression test. The order used to be the other way round, so
+        # `CRETARGET_CACHE_DIR=/tmp/x cretarget setup-reference` silently
+        # ignored the override and downloaded 3.2 GB to the configured
+        # location instead.
         monkeypatch.setenv("CRETARGET_CACHE_DIR", "/from/env")
+        resolved = cfg.cache_dir({"cache": {"dir": "/from/config"}})
+        assert str(resolved) == "/from/env"
+
+    def test_falls_back_to_the_config_file(self, cfg, monkeypatch):
+        monkeypatch.delenv("CRETARGET_CACHE_DIR", raising=False)
         resolved = cfg.cache_dir({"cache": {"dir": "/from/config"}})
         assert str(resolved) == "/from/config"
 
-    def test_falls_back_to_environment(self, cfg, monkeypatch):
+    def test_uses_environment_when_no_config_value(self, cfg, monkeypatch):
         monkeypatch.setenv("CRETARGET_CACHE_DIR", "/from/env")
         assert str(cfg.cache_dir({})) == "/from/env"
+
+    def test_environment_value_is_expanded(self, cfg, monkeypatch):
+        monkeypatch.setenv("HOME", "/home/someone")
+        monkeypatch.setenv("CRETARGET_CACHE_DIR", "~/scratch/cache")
+        assert str(cfg.cache_dir({})) == "/home/someone/scratch/cache"
 
     def test_defaults_to_home(self, cfg, monkeypatch):
         monkeypatch.delenv("CRETARGET_CACHE_DIR", raising=False)

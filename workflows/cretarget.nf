@@ -53,8 +53,17 @@ workflow CRETARGET {
     // Split into chunks. splitFasta streams the file rather than holding
     // every record in memory, which the old Python splitter did not.
     //
+    /*
+     * `as int` is load-bearing. Nextflow 26 stopped coercing command-line
+     * params to numbers, so `--chunk_size 1000` arrives as a String while the
+     * same value from a config file or a profile arrives as an Integer.
+     * splitFasta rejects the String with "Value don't match: class
+     * java.lang.Integer", which reads as if Integer were the problem when it
+     * is in fact what is expected. Nextflow 25 and earlier coerced it, so this
+     * only breaks for people on a current Nextflow.
+     */
     ch_chunks = PREP_REGIONS.out.fasta
-        .splitFasta(by: params.chunk_size, file: true)
+        .splitFasta(by: params.chunk_size as int, file: true)
 
     //
     // FlashFry discover + score, one task per chunk.

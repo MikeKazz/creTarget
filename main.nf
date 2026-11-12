@@ -118,11 +118,13 @@ def validateParams() {
                   "Running with an engine enabled and no image would silently " +
                   "execute tasks against host tools."
     }
-    if (params.container_image && !workflow.containerEngine) {
-        log.warn "--container_image was given (${params.container_image}) but no " +
-                 "container engine is enabled; it will be ignored. Add " +
-                 "-profile singularity (or docker/apptainer)."
-    }
+    /*
+     * There is deliberately no warning for `container_image` set without a
+     * container engine. It had one, but once the parameter gained a default
+     * value the condition became true on every non-container run, so the
+     * warning fired constantly and told the user nothing. Nextflow cannot
+     * distinguish a defaulted param from an explicitly passed one.
+     */
 
     if (errors) {
         log.error "Parameter validation failed:\n" + errors.collect { "  - ${it}" }.join('\n')

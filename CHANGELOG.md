@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3]
+
+### Fixed
+- **The pipeline could not run on Nextflow 26.** Nextflow 26 stopped coercing
+  command-line parameters to numbers, so `--chunk_size 1000` arrives as a
+  String while the same value from a config file or profile arrives as an
+  Integer. `splitFasta(by:)` rejects the String with "Value don't match: class
+  java.lang.Integer" -- phrasing that reads as if Integer were the problem
+  rather than what is expected. Since 26.x is what a fresh `curl
+  get.nextflow.io` installs, this broke every new user. The value is now cast
+  explicitly. CI gained Nextflow 26.10.5 and now passes `--chunk_size` on the
+  command line: supplying it only through the test profile meant the String
+  path was never exercised, which is why CI stayed green through this bug.
+- **`CRETARGET_CACHE_DIR` was ignored when `[cache].dir` was configured.** A
+  configured value silently won, so `CRETARGET_CACHE_DIR=/tmp/scratch cretarget
+  setup-reference` downloaded 3.2 GB to the configured location instead of the
+  requested one, without a word. The environment variable now takes precedence,
+  which is the conventional behaviour for a per-invocation override.
+- Removed a warning that fired on every run without a container profile. It was
+  correct when `container_image` had no default, but once the parameter gained
+  one the condition was always true.
+
+### Added
+- Unit tests for `summarize_hits` and `build_guide_ids` (the seed-finder
+  aggregation, previously untested -- an end-to-end run only exercises it when
+  seed-finder actually finds hits) and for `coords-to-bed`, which had no
+  coverage at all. 86 tests to 115.
+
 ## [0.2.1]
 
 Archived on Zenodo: concept DOI [10.5281/zenodo.24148024](https://doi.org/10.5281/zenodo.24148024),

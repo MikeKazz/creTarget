@@ -91,7 +91,7 @@ jobs:
         # Oldest SUPPORTED (24.04 is where process.resourceLimits landed),
         # a current production version, and latest -- the config/script
         # parser has tightened considerably across this range.
-        nxf_version: ["24.04.4", "25.10.3", "latest-stable"]
+        nxf_version: ["24.04.4", "25.10.3", "26.10.5", "latest-stable"]
 
     steps:
       - uses: actions/checkout@v4
@@ -190,6 +190,10 @@ jobs:
 
       - name: Run the pipeline
         run: |
+          # --chunk_size is passed on the COMMAND LINE on purpose. Nextflow 26
+          # delivers CLI params as String while config/profile values arrive as
+          # Integer, and splitFasta(by:) rejects the String. Supplying it only
+          # via the test profile would never exercise that path.
           nextflow run . -profile test,local \
             --snp_bed ci_snps.txt \
             --enhancer_bed ci_enh.txt \
@@ -198,6 +202,7 @@ jobs:
             --flashfry_db ci_ref/mini_cas9ngg_db \
             --atac_narrowpeak ci_atac.narrowPeak \
             --dedup_blast_radius \
+            --chunk_size 2 \
             --outdir results_ci
 
       - name: Verify the outputs
@@ -258,6 +263,7 @@ jobs:
             --flashfry_db ci_ref/mini_cas9ngg_db \
             --atac_narrowpeak ci_atac.narrowPeak \
             --dedup_blast_radius \
+            --chunk_size 2 \
             --outdir results_det
           if ! cmp -s results_ci/guides.ranked.tsv results_det/guides.ranked.tsv; then
             echo "ERROR: two runs of the same input produced different output"

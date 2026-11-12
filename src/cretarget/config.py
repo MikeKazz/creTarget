@@ -151,17 +151,26 @@ def _dump_toml(config: dict) -> str:
 
 
 def cache_dir(config: dict | None = None) -> Path:
-    """Resolution order: [cache].dir -> $CRETARGET_CACHE_DIR -> ~/.cretarget
+    """Resolution order: $CRETARGET_CACHE_DIR -> [cache].dir -> ~/.cretarget
+
+    The environment variable wins deliberately. It is the conventional
+    per-invocation override, and someone who writes
+
+        CRETARGET_CACHE_DIR=/tmp/scratch cretarget setup-reference
+
+    means it. The earlier order let a configured [cache].dir silently take
+    precedence, so that command downloaded 3.2 GB to the configured location
+    instead -- an explicit instruction ignored without a word.
 
     Kept in one place because every downloadable asset (model checkpoints,
     ATAC peaks, reference genome) has to agree on it, and because clusters
     routinely need it pointed somewhere other than $HOME.
     """
+    env = os.environ.get("CRETARGET_CACHE_DIR")
+    if env:
+        return Path(expand(env))
     if config:
         configured = get_path(config, "cache", "dir")
         if configured:
             return Path(configured)
-    env = os.environ.get("CRETARGET_CACHE_DIR")
-    if env:
-        return Path(expand(env))
     return Path.home() / ".cretarget"
