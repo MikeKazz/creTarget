@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cretarget"
-version = "0.2.1"
+version = "0.2.2"
 description = "Design, score, and rank CRISPRi guide RNAs for noncoding target regions (SNPs/enhancers, hg38)"
 readme = "README.md"
 requires-python = ">=3.10"

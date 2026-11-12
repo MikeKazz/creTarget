@@ -1,5 +1,8 @@
 # creTarget
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24148024.svg)](https://doi.org/10.5281/zenodo.24148024)
+[![Container](https://img.shields.io/badge/container-ghcr.io-blue)](https://github.com/MikeKazz/creTarget/pkgs/container/cretarget)
+
 Design, score, and rank CRISPRi guide RNAs for noncoding target regions —
 SNPs/points or enhancers/intervals — in hg38, at any scale from a handful
 of targets to genome-wide.
@@ -254,10 +257,10 @@ software.
 solve, no version skew between users:
 
 ```bash
-nextflow run MikeKazz/creTarget -r v0.2.1 -profile slurm,singularity ...
+nextflow run MikeKazz/creTarget -r v0.2.2 -profile slurm,singularity ...
 ```
 
-It defaults to `ghcr.io/mikekazz/cretarget:0.2.1`; override with
+It defaults to `ghcr.io/mikekazz/cretarget:0.2.2`; override with
 `--container_image`. The `conda` profile builds the same pinned environment
 from `assets/environment.yml` instead; if conda's solver is slow, use
 `-profile micromamba` (same environment, a solver that handles it in seconds). `--queue` and
@@ -321,6 +324,12 @@ minutes rather than hours.
   FlashFry index, but are not validated.
 
 ## Citation
+
+creTarget is archived on Zenodo. Cite
+[10.5281/zenodo.24148024](https://doi.org/10.5281/zenodo.24148024) for the software in
+general (this always resolves to the latest release), or
+[10.5281/zenodo.24148025](https://doi.org/10.5281/zenodo.24148025) for v0.2.1
+specifically when exact reproducibility matters.
 
 If you use creTarget, please cite it (see `CITATION.cff`) along with
 [FlashFry](https://github.com/mckennalab/FlashFry), and — if you use

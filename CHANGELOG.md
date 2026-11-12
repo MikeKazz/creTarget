@@ -6,6 +6,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.2.1]
 
+Archived on Zenodo: concept DOI [10.5281/zenodo.24148024](https://doi.org/10.5281/zenodo.24148024),
+this version [10.5281/zenodo.24148025](https://doi.org/10.5281/zenodo.24148025).
+
 Release engineering and fixes found while validating the first public release.
 No change to pipeline results.
 
@@ -49,6 +52,10 @@ No change to pipeline results.
   the repository itself. It now falls back to `git rev-parse` on `projectDir`
   and also records whether the working tree was dirty -- a commit hash is
   misleading if the run used uncommitted edits.
+- An unusable input path (a deleted file, a broken symlink, or a bash process
+  substitution such as `<(...)`, which Nextflow stages by file-descriptor
+  basename and so cannot stage at all) produced a Python traceback instead of
+  a readable message.
 - `PREP_REGIONS` memory raised to 12 GB. An earlier in-process measurement said
   2.22 GB, but it instrumented only the Python functions and missed the
   `bedtools getfasta` child process; the real figure at full scale is 5.20 GB.

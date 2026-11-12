@@ -12,10 +12,22 @@ type: software
 authors:
   - family-names: Kazemi
     given-names: Mehrdad
-version: 0.2.1
+version: 0.2.2
+# The CONCEPT doi, which always resolves to the latest release. Zenodo mints
+# two DOIs per release: this one for the software as a whole, and a
+# version-specific one below. Cite the concept DOI when readers should get the
+# current version, and the version DOI when exact reproducibility matters.
+doi: 10.5281/zenodo.24148024
 license: MIT
 repository-code: "https://github.com/MikeKazz/creTarget"
 url: "https://github.com/MikeKazz/creTarget"
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.24148024
+    description: Concept DOI -- all versions of creTarget
+  - type: doi
+    value: 10.5281/zenodo.24148025
+    description: DOI for creTarget v0.2.1 specifically
 keywords:
   - CRISPRi
   - guide RNA design

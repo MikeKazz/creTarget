@@ -22,6 +22,7 @@ flagging sees every target, not just those of one type.
 
 import argparse
 import csv
+import os
 import re
 import shutil
 import subprocess
@@ -56,6 +57,18 @@ def read_targets(bed_path, input_type, prefix=None):
     prefix = prefix or input_type
     regions = []
     n_skipped = 0
+
+    # A clear message beats a traceback. This fires for a deleted file, a
+    # broken symlink, or -- the case that prompted it -- a bash process
+    # substitution passed as a pipeline input: Nextflow stages inputs by
+    # basename, so `<(...)` becomes a file literally named after the file
+    # descriptor and nothing is staged.
+    if not os.path.isfile(bed_path):
+        raise SystemExit(
+            f"ERROR: input file not found or not a regular file: {bed_path}\n"
+            f"If you passed a process substitution such as <(...) or a pipe, "
+            f"write the targets to a real file first -- they cannot be staged."
+        )
 
     with open(bed_path) as fh:
         for i, raw in enumerate(fh):
