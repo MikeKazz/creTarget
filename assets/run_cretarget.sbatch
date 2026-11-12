@@ -1,120 +1,132 @@
 #!/bin/bash
+#
+# Driver submission template for a SLURM cluster.
+#
+#   1. copy this file next to your inputs
+#   2. edit the CONFIGURE block below
+#   3. sbatch run_cretarget.sbatch
+#
 #SBATCH --job-name=cretarget
-#SBATCH --partition=gpu
 #SBATCH --nodes=1
 #
 # IMPORTANT -- the next two values are deliberately tiny.
 #
 # This job is only the Nextflow *driver*: it submits the real work as separate
-# SLURM jobs and then sits waiting for them. On a single-node cluster like
-# boltzmann, every resource this job holds is a resource the actual work cannot
-# have. Request 8 CPUs and 80 GB here (as a normal analysis job would) and you
-# reserve most of the machine to do nothing, starving the jobs you are waiting
-# on -- in the worst case the driver waits forever for work that can never be
-# scheduled, which is a deadlock, not a slow run.
+# scheduler jobs and then waits. On a single-node cluster every resource this
+# job holds is a resource the actual work cannot have. Request 8 CPUs and
+# 80 GB here, as a normal analysis job would, and you reserve most of the
+# machine to do nothing -- starving the jobs you are waiting on, and in the
+# worst case deadlocking: waiting forever for work that can never be
+# scheduled.
 #
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=4G
-#
-# No --gres here. The driver needs no GPU; the LAUNCH_DCAS9 tasks request their
-# own via the boltzmann profile.
-#
 #SBATCH --time=240:00:00
-#SBATCH --output=/home/jmorrislab1/mkazemi/___ProJECTS___/creTarget/logs/cretarget_%j.out
-#SBATCH --error=/home/jmorrislab1/mkazemi/___ProJECTS___/creTarget/logs/cretarget_%j.err
+#
+# No --gres here. The driver needs no GPU; the LAUNCH_DCAS9 tasks request
+# their own through the site profile.
+#
+# Uncomment and set if your site requires them:
+##SBATCH --partition=YOUR_PARTITION
+##SBATCH --account=YOUR_ACCOUNT
+#
+#SBATCH --output=logs/cretarget_%j.out
+#SBATCH --error=logs/cretarget_%j.err
 
 set -euo pipefail
 
-# ---------------------------------------------------------------------------
-# Two filesystems, on purpose.
-#
-#   CODE_DIR  (jmorrislab1) -- code, inputs, logs. Small, backed up, the thing
-#                              you edit and commit.
-#   DATA_DIR  (jmorrislab0) -- reference genome, FlashFry index, model
-#                              checkpoints, the Nextflow work directory, and
-#                              results. This is where the TB-scale storage is.
-#
-# Sizes that justify the split: the reference + FlashFry index is ~3.2 GB, the
-# Nextflow work directory runs to hundreds of GB on a genome-wide run, and the
-# collated output TSV is ~63 GB for 2.35M cCREs (~132M guide rows).
-# ---------------------------------------------------------------------------
-CODE_DIR="/home/jmorrislab1/mkazemi/___ProJECTS___/creTarget"
-DATA_DIR="/home/jmorrislab0/mkazemi/creTarget"
+# ===========================================================================
+# CONFIGURE -- everything you need to edit is in this block
+# ===========================================================================
 
-export CRETARGET_CACHE_DIR="${DATA_DIR}/cache"   # reference, index, checkpoints
-export NXF_WORK="${DATA_DIR}/work"               # Nextflow intermediates
+# Where the pipeline, inputs and logs live. Small; keep it backed up.
+CODE_DIR="/path/to/your/project"
 
-# Nextflow's own JVM. The default heap is generous for a driver that is mostly
-# waiting; capping it keeps the driver inside its 4 GB allocation.
+# Where reference data, the Nextflow work directory and results go. Large:
+# budget ~300 GB of work directory and ~50 GB of output for a genome-wide run.
+DATA_DIR="/path/to/large/storage"
+
+# Reference data. `cretarget setup-reference` downloads the first and third.
+# FlashFry is a separate JVM tool:
+#   https://github.com/mckennalab/FlashFry/releases
+REF_FASTA="${DATA_DIR}/cache/reference/hg38.fa"
+FLASHFRY_JAR="${DATA_DIR}/tools/FlashFry-assembly-1.15.jar"
+FLASHFRY_DB="${DATA_DIR}/cache/reference/hg38_standard_cas9ngg_db"
+
+# Your targets: BED, or one "chr:start-end" per line.
+TARGETS="${CODE_DIR}/inputs/targets.bed"
+
+# The site profile to run under. `singlenode` is the worked example in
+# conf/example-singlenode.config; `slurm` is the generic one.
+PROFILE="singlenode"
+
+# How creTarget is installed. Leave both empty if it is already on PATH.
+CONDA_SH=""          # e.g. /opt/miniconda3/etc/profile.d/conda.sh
+PYTHON_ENV=""        # a conda env name, or a path to a venv to activate
+
+# ===========================================================================
+# Below here you should not need to edit
+# ===========================================================================
+
+export CRETARGET_CACHE_DIR="${DATA_DIR}/cache"
+export CRETARGET_CONFIG_DIR="${CODE_DIR}/.cretarget_config"
+export NXF_WORK="${DATA_DIR}/work"
+export NXF_HOME="${DATA_DIR}/.nextflow_home"
+
+# The driver's own JVM. The default heap is generous for a process that mostly
+# waits; capping it keeps the driver inside its 4 GB allocation.
 export NXF_OPTS='-Xms500M -Xmx2G'
 
-# Keep Nextflow's assets/plugins cache off $HOME too -- it is small, but it
-# avoids surprises if $HOME has a quota.
-export NXF_HOME="${DATA_DIR}/.nextflow_home"
-export CRETARGET_CONFIG_DIR="${CODE_DIR}/.cretarget_config"
-
 mkdir -p "${CODE_DIR}/logs" "${DATA_DIR}"/{cache,work,results}
+cd "${CODE_DIR}"
 
 # A batch job gets a NON-interactive shell, where `conda activate` fails
 # because the conda initialize block in ~/.bashrc never runs. Sourcing
-# conda.sh first is what makes activation work here. Verified on boltzmann:
-# bare `conda activate` FAILS, `source conda.sh && conda activate` WORKS.
-CONDA_SH="/opt/miniconda3/etc/profile.d/conda.sh"
-if [ -r "$CONDA_SH" ]; then
+# conda.sh first is what makes activation work here.
+if [ -n "${CONDA_SH}" ] && [ -r "${CONDA_SH}" ]; then
     # shellcheck disable=SC1090
-    . "$CONDA_SH"
+    . "${CONDA_SH}"
 fi
-
-# Activate whichever environment creTarget is installed into. On boltzmann
-# this is a plain venv, not a conda env, so it is sourced directly.
-PYENV="/home/jmorrislab1/mkazemi/myenv"
-if [ -r "${PYENV}/bin/activate" ]; then
-    # shellcheck disable=SC1091
-    . "${PYENV}/bin/activate"
+if [ -n "${PYTHON_ENV}" ]; then
+    if [ -r "${PYTHON_ENV}/bin/activate" ]; then
+        # shellcheck disable=SC1091
+        . "${PYTHON_ENV}/bin/activate"      # a venv
+    else
+        conda activate "${PYTHON_ENV}"      # a conda env
+    fi
 fi
-
-# Reference data. These already exist on boltzmann, so `cretarget
-# setup-reference` is unnecessary here -- it is for a fresh machine.
-#
-# The FASTA is used only by bedtools to extract region sequence; the FlashFry
-# database is used for the off-target search. They need not be the same file,
-# but they MUST be the same assembly. This pairing (hg38.fa with the
-# hg38_standard index) is the one the pre-Nextflow pipeline already used.
-REF_FASTA="/home/jmorrislab1/mkazemi/.guidenet_reference/hg38.fa"
-FLASHFRY_JAR="/home/jmorrislab1/mkazemi/bin/FlashFry-assembly-1.15.jar"
-FLASHFRY_DB="/home/jmorrislab1/mkazemi/.guidenet_reference/hg38_standard_cas9ngg_db"
 
 # Fail early and loudly rather than part-way through a long run.
 command -v cretarget >/dev/null || { echo "ERROR: cretarget not on PATH" >&2; exit 1; }
 command -v nextflow  >/dev/null || { echo "ERROR: nextflow not on PATH"  >&2; exit 1; }
-[ -r "$REF_FASTA" ]        || { echo "ERROR: no FASTA at $REF_FASTA" >&2; exit 1; }
-[ -r "${REF_FASTA}.fai" ]  || { echo "ERROR: no FASTA index at ${REF_FASTA}.fai -- run: samtools faidx $REF_FASTA" >&2; exit 1; }
-[ -r "$FLASHFRY_JAR" ]     || { echo "ERROR: no FlashFry jar at $FLASHFRY_JAR" >&2; exit 1; }
-[ -r "$FLASHFRY_DB" ]      || { echo "ERROR: no FlashFry index at $FLASHFRY_DB" >&2; exit 1; }
-[ -r "${FLASHFRY_DB}.header" ] || { echo "ERROR: no FlashFry index header at ${FLASHFRY_DB}.header" >&2; exit 1; }
+[ -r "$TARGETS" ]              || { echo "ERROR: no targets at $TARGETS" >&2; exit 1; }
+[ -r "$REF_FASTA" ]            || { echo "ERROR: no FASTA at $REF_FASTA" >&2; exit 1; }
+[ -r "${REF_FASTA}.fai" ]      || { echo "ERROR: no FASTA index at ${REF_FASTA}.fai -- run: samtools faidx $REF_FASTA" >&2; exit 1; }
+[ -r "$FLASHFRY_JAR" ]         || { echo "ERROR: no FlashFry jar at $FLASHFRY_JAR" >&2; exit 1; }
+[ -r "$FLASHFRY_DB" ]          || { echo "ERROR: no FlashFry index at $FLASHFRY_DB" >&2; exit 1; }
+[ -r "${FLASHFRY_DB}.header" ] || { echo "ERROR: no index header at ${FLASHFRY_DB}.header" >&2; exit 1; }
 
-cd "${CODE_DIR}"
-
-# Run the pipeline from the local clone. Switch to `MikeKazz/creTarget` (and
-# add `-r v0.2.0`) once you want Nextflow to pull a tagged release from GitHub
-# instead -- pinning a revision is what makes a run reproducible.
-nextflow run "${CODE_DIR}/creTarget" \
-    -profile boltzmann \
+nextflow run MikeKazz/creTarget -r v0.2.4 \
+    -profile "${PROFILE}" \
     -resume \
-    --enhancer_bed "${CODE_DIR}/inputs/enhancers_subset.txt" \
+    --enhancer_bed "${TARGETS}" \
     --fasta        "${REF_FASTA}" \
     --flashfry_jar "${FLASHFRY_JAR}" \
     --flashfry_db  "${FLASHFRY_DB}" \
     --outdir       "${DATA_DIR}/results"
 
-# To add the optional steps, append:
+# Optional steps, appended as needed:
+#
+#   --snp_bed /path/to/snps.txt          # "chr:pos" per line, 1-based
+#   --atac_narrowpeak /path/to/peaks.narrowPeak
+#   --dedup_blast_radius
 #
 #   --run_launch_dcas9 \
-#   --launch_script /path/to/launch-dCas9/launch-dCas9.py \
-#   --launch_python /path/to/conda/envs/<torch-env>/bin/python \
+#   --launch_script /path/to/launch-dCas9.py \
+#   --launch_python /path/to/torch-env/bin/python \
 #   --ckpt_dir      "${CRETARGET_CACHE_DIR}/models" \
 #
 #   --run_seed_finder \
 #   --seed_finder_dir /path/to/seed-finder-lite \
-#   --seed_finder_min_length 8 \
+#   --seed_finder_min_length 10 \
 #   --seed_finder_tss_window 1000

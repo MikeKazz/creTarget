@@ -4,6 +4,47 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4]
+
+No functional changes. The pipeline, its results and its dependencies are
+identical to 0.2.3; this release makes the repository usable by someone other
+than its author.
+
+### Changed
+- **Site-specific material replaced with generic equivalents.** The repository
+  carried the configuration, paths and setup notes of the single cluster it was
+  developed on. A reader could not tell which numbers were general and which
+  were artefacts of one machine, and the documented commands referenced
+  directories that exist nowhere else.
+  - `conf/boltzmann.config` -> `conf/example-singlenode.config`, and the
+    profile that includes it is now `singlenode`. **This renames a profile:**
+    `-profile boltzmann` no longer exists. The configuration itself is
+    unchanged -- every measured value and the reasoning behind it is retained,
+    with only the host and path identifiers removed.
+  - `assets/inspect_boltzmann.sh` -> `assets/inspect_cluster.sh`. The two
+    hardcoded directories became optional arguments 2 and 3, defaulting to the
+    working directory, so the survey runs anywhere without editing.
+  - `assets/cretarget_env.sh` -> `assets/site_env.sh.example`, now a template
+    of placeholders rather than one site's live values.
+  - `assets/run_cretarget.sbatch` rewritten around a single `CONFIGURE` block
+    at the top, with preflight checks that fail on a missing reference or an
+    unindexed FASTA before submitting hours of work rather than during it.
+  - `docs/boltzmann-setup.md` -> `docs/cluster-setup.md`, rewritten as a
+    six-step first install for an arbitrary cluster: survey, install,
+    reference data, smoke test, site profile, scale up. Its troubleshooting
+    section covers the failures actually encountered during development --
+    process substitution as an input, a stale `NXF_SINGULARITY_CACHEDIR`,
+    `conda activate` in a non-interactive batch shell, requests escalating
+    past a partition's limits, and output ordering.
+  - Removed `docs/release-checklist.md`, which was a private worklist.
+
+### Fixed
+- `bump_version.sh` did not update the pipeline revision pinned in
+  `assets/run_cretarget.sbatch`, so the driver template would have kept
+  fetching the previous release after a bump. It is now updated and verified,
+  and the script additionally warns about any remaining mention of the old
+  version so a missed pin cannot pass silently again.
+
 ## [0.2.3]
 
 ### Fixed
@@ -98,16 +139,16 @@ breaking change to how the pipeline is invoked.
   specific scheduler queries behind each setting (does the scheduler account
   for memory, does it enforce it, is the node shared with work it cannot see),
   so a new cluster can be configured without reverse-engineering the example.
-- `assets/inspect_boltzmann.sh`: read-only cluster survey reporting everything
+- `assets/inspect_cluster.sh`: read-only cluster survey reporting everything
   a site profile needs -- scheduler config, conda layout, filesystem types and
   locking, GPU compute capabilities, and pre-existing reference data.
-- `assets/cretarget_env.sh`: project-local environment file, sourced per
+- `assets/site_env.sh.example`: project-local environment file, sourced per
   session. Uses only `CRETARGET_*`/`NXF_*` names and keeps the tool's config
   inside the project, so nothing leaks into a shared `~/.bashrc`.
 - Site profile support: `--queue` and `--gpu_gres` parameters wired into the
   SLURM, PBS, SGE, and LSF profiles, plus a worked single-node SLURM example
-  (`conf/boltzmann.config`), a driver submission template
-  (`assets/run_cretarget.sbatch`), and `docs/boltzmann-setup.md`.
+  (`conf/example-singlenode.config`), a driver submission template
+  (`assets/run_cretarget.sbatch`), and `docs/cluster-setup.md`.
 - `--gpu_count` for round-robin GPU pinning under the local executor, where no
   scheduler sets `CUDA_VISIBLE_DEVICES`. Under a scheduler the pipeline leaves
   that variable alone, so it never claims a device allocated to someone else.

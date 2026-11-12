@@ -30,7 +30,7 @@ sed -i "s|archive/refs/tags/v${OLD}\.tar\.gz|archive/refs/tags/v${NEW}.tar.gz|" 
 sed -i "s|cretarget:${OLD}|cretarget:${NEW}|g"                             Dockerfile nextflow.config README.md
 sed -i "s|image\.version=\"${OLD}\"|image.version=\"${NEW}\"|"             Dockerfile
 sed -i "s|^    version         = '${OLD}'|    version         = '${NEW}'|" nextflow.config
-sed -i "s|-r v${OLD}|-r v${NEW}|g"                                         README.md
+sed -i "s|-r v${OLD}|-r v${NEW}|g"              README.md assets/run_cretarget.sbatch
 
 echo
 echo "=== verification ==="
@@ -46,6 +46,16 @@ check nextflow.manifest   "$NEW" "$(sed -n "s/^    version         = '\(.*\)'/\1
 check container_image     "$NEW" "$(sed -n "s|.*cretarget:\([0-9.]*\)'.*|\1|p" nextflow.config)"
 check environment.yml     "$NEW" "$(sed -n 's|.*refs/tags/v\([0-9.]*\)\.tar\.gz|\1|p' assets/environment.yml)"
 check Dockerfile.label    "$NEW" "$(sed -n 's|.*image\.version="\([0-9.]*\)".*|\1|p' Dockerfile)"
+check sbatch.revision     "$NEW" "$(sed -n 's|.*-r v\([0-9.]*\) .*|\1|p' assets/run_cretarget.sbatch)"
+
+# Catch any reference the targeted seds above did not know about. A stale pin
+# in a template is worse than a stale comment: it silently runs the old code.
+stale=$(grep -rln "${OLD}" --exclude-dir=.git --exclude-dir=__pycache__ \
+            --exclude=CHANGELOG.md --exclude=bump_version.sh . 2>/dev/null || true)
+if [ -n "$stale" ]; then
+    printf '  WARN %-28s %s\n' "still mention ${OLD}:" "$(echo "$stale" | tr '\n' ' ')"
+    echo "       check each one -- a historical comment is fine, a pin is not."
+fi
 
 echo
 if [ "$fail" -ne 0 ]; then

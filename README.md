@@ -232,11 +232,14 @@ conf/base.config            per-process resources and retry escalation
 conf/modules.config         publishing rules
 conf/limits.config          resource ceilings, applied last
 conf/site-template.config   commented blank to copy for a new cluster
-conf/boltzmann.config       filled-in worked example (single-node SLURM)
+conf/example-singlenode.config
+                            filled-in worked example (single-node SLURM)
 conf/test.config            small-input smoke-test profile
 workflows/cretarget.nf      the workflow DAG
 modules/local/              one process per step
 src/cretarget/              the Python package (steps, config, asset fetching, doctor)
+assets/                     cluster survey script, sbatch template, conda env
+docs/cluster-setup.md       step-by-step first install on a new cluster
 tests/                      pytest suite
 ```
 
@@ -257,10 +260,10 @@ software.
 solve, no version skew between users:
 
 ```bash
-nextflow run MikeKazz/creTarget -r v0.2.3 -profile slurm,singularity ...
+nextflow run MikeKazz/creTarget -r v0.2.4 -profile slurm,singularity ...
 ```
 
-It defaults to `ghcr.io/mikekazz/cretarget:0.2.3`; override with
+It defaults to `ghcr.io/mikekazz/cretarget:0.2.4`; override with
 `--container_image`. The `conda` profile builds the same pinned environment
 from `assets/environment.yml` instead; if conda's solver is slow, use
 `-profile micromamba` (same environment, a solver that handles it in seconds). `--queue` and
@@ -274,14 +277,18 @@ scheduler cannot express — notably when it does *not* account for memory when
 placing jobs, does not enforce the memory it granted, or shares nodes with
 work it cannot see. `conf/site-template.config` is a commented blank to copy,
 and it lists the specific commands that answer each question.
-`conf/boltzmann.config` is a filled-in worked example (single-node SLURM,
-shared GPUs, no cgroup containment). Register your copy in the `profiles`
-block of `nextflow.config`, or keep it out of the repo and pass it with
+`conf/example-singlenode.config` is a filled-in worked example for a
+single-node SLURM cluster with shared GPUs, where the scheduler accounts for
+memory but does not enforce it. Its numbers are measured rather than guessed
+and the reasoning is documented inline. Register your copy in the `profiles`
+block of `nextflow.config`, or keep it outside the repository and pass it with
 `-c /path/to/mysite.config`.
 
-`assets/inspect_boltzmann.sh` is a read-only survey script that reports
-everything a site profile needs. Despite the name it is not machine-specific —
-edit the two paths at the top and run it anywhere.
+`assets/inspect_cluster.sh` is a read-only survey script that reports
+everything a site profile needs — scheduler configuration, filesystem types
+and locking, GPU compute capabilities, and any reference data already on disk.
+
+`docs/cluster-setup.md` walks through a first install on a new cluster.
 
 On a **single-node cluster** in particular, submit the Nextflow driver job
 with *minimal* resources (1 CPU, a few GB). The driver only waits; every

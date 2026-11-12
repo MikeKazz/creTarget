@@ -1,29 +1,36 @@
 #!/usr/bin/env bash
 #
-# inspect_boltzmann.sh -- read-only survey of the cluster before installing
-# anything.
+# inspect_cluster.sh -- read-only survey of a cluster before installing
+# anything. Reports everything a creTarget site profile needs: scheduler
+# configuration, conda layout, filesystem types and locking, GPU compute
+# capabilities, network reachability, and any reference data already on disk.
 #
-# SAFETY: this script is strictly read-only outside its own report file. It
-# does not install, modify ~/.bashrc, create conda environments, export
-# anything into your shell, or write anywhere except $REPORT (which lives in
-# the project directory you pass in, default: the directory this script is
-# run from). Every external command is guarded, so a missing tool produces a
-# "not found" line rather than aborting the run.
+# SAFETY: strictly read-only outside its own report file. It does not install,
+# modify shell rc files, create conda environments, export anything into your
+# shell, or write anywhere except $REPORT. Every external command is guarded,
+# so a missing tool produces a "not found" line rather than aborting the run.
 #
 # Usage:
-#   bash inspect_boltzmann.sh                 # report into $PWD
-#   bash inspect_boltzmann.sh /path/to/outdir
+#   bash inspect_cluster.sh                                  # report into $PWD
+#   bash inspect_cluster.sh <outdir>                         # report into outdir
+#   bash inspect_cluster.sh <outdir> <code_dir> <data_dir>   # also check these
 #
-# Then paste the report, or upload the file.
+#   code_dir  where you keep the pipeline, inputs and logs (small)
+#   data_dir  where reference data, the Nextflow work directory and results go
+#             (large -- hundreds of GB for a genome-wide run)
+#
+# Then paste the report, or attach the file.
 
 set -uo pipefail   # deliberately NOT -e: a failed probe must not stop the survey
 
 OUTDIR="${1:-$PWD}"
-REPORT="${OUTDIR}/boltzmann_inspection_$(date +%Y%m%d_%H%M%S).txt"
+REPORT="${OUTDIR}/cretarget_cluster_inspection_$(date +%Y%m%d_%H%M%S).txt"
 
-# Paths this project cares about. Adjust if they ever change.
-CODE_DIR="/home/jmorrislab1/mkazemi/___ProJECTS___/creTarget"
-DATA_DIR="/home/jmorrislab0/mkazemi/creTarget"
+# Directories to check, overridable as arguments 2 and 3. They need not exist
+# yet -- the script reports on the nearest existing parent so you still learn
+# the free space and filesystem type of the volume they will live on.
+CODE_DIR="${2:-$PWD}"
+DATA_DIR="${3:-$PWD}"
 
 # $USER and $HOME are not guaranteed to be set (a batch job may inherit
 # neither), and this script runs under `set -u`, so resolve them defensively
@@ -289,7 +296,7 @@ sub "partition detail"
 try scontrol show partition
 sub "KEY CONFIG -- does SLURM treat memory as a consumable resource?"
 echo "(if SelectTypeParameters lacks CR_Memory, SLURM will NOT gate on --mem,"
-echo " and the maxForks values in conf/boltzmann.config are the only thing"
+echo " and the maxForks values in your site profile are the only thing"
 echo " preventing a memory overcommit)"
 if have scontrol; then
     scontrol show config 2>/dev/null | grep -iE \
@@ -427,7 +434,7 @@ done
 section "13. EXISTING PROJECT ASSETS (avoid re-downloading 3.2 GB)"
 # =========================================================================
 sub "any hg38 reference already on disk?"
-for base in "$CURRENT_HOME" /home/jmorrislab0/mkazemi /home/jmorrislab1/mkazemi; do
+for base in "$CURRENT_HOME" "$CODE_DIR" "$DATA_DIR"; do
     [ -d "$base" ] && find "$base" -maxdepth 4 \
         \( -name 'hg38*.fa' -o -name 'hg38*.fa.gz' -o -name 'GRCh38*.fa' \) \
         -printf '  %10s  %p\n' 2>/dev/null | head -10
@@ -435,21 +442,21 @@ done
 echo "  (empty result = nothing found within 4 levels)"
 
 sub "any FlashFry jar or index already on disk?"
-for base in "$CURRENT_HOME" /home/jmorrislab0/mkazemi /home/jmorrislab1/mkazemi; do
+for base in "$CURRENT_HOME" "$CODE_DIR" "$DATA_DIR"; do
     [ -d "$base" ] && find "$base" -maxdepth 5 \
         \( -iname 'FlashFry*.jar' -o -name '*cas9ngg_db*' \) \
         -printf '  %10s  %p\n' 2>/dev/null | head -10
 done
 
 sub "launch-dCas9 and seed-finder-lite"
-for base in "$CURRENT_HOME" /home/jmorrislab0/mkazemi /home/jmorrislab1/mkazemi; do
+for base in "$CURRENT_HOME" "$CODE_DIR" "$DATA_DIR"; do
     [ -d "$base" ] && find "$base" -maxdepth 5 \
         \( -iname 'launch-dCas9*' -o -iname 'seed-finder*' -o -iname 'targetfinder' \) \
         -printf '  %p\n' 2>/dev/null | head -20
 done
 
 sub "existing model checkpoints (.pth)"
-for base in "$CURRENT_HOME" /home/jmorrislab0/mkazemi /home/jmorrislab1/mkazemi; do
+for base in "$CURRENT_HOME" "$CODE_DIR" "$DATA_DIR"; do
     [ -d "$base" ] && find "$base" -maxdepth 6 -name 'ckpt-seq-*.pth' \
         -printf '  %10s  %p\n' 2>/dev/null | head -10
 done

@@ -1,0 +1,100 @@
+# site_env.sh.example -- a project-local environment, sourced deliberately.
+#
+#   cp site_env.sh.example site_env.sh     # then edit the paths
+#   source site_env.sh
+#
+# This is NOT meant for ~/.bashrc. These settings would then apply to every
+# shell and every other project, which on a shared machine is how one project
+# quietly breaks another. Source it when you work on creTarget; open a new
+# shell and it is gone.
+#
+# Every variable is CRETARGET_-prefixed or already namespaced (NXF_*), so
+# nothing here can collide with another project's generic CODE_DIR/DATA_DIR.
+#
+# The sbatch driver sets all of this itself, in its own process, so a
+# submitted job never depends on your interactive shell state.
+
+# --- Paths -----------------------------------------------------------------
+# Small and backed up: code, inputs, logs.
+export CRETARGET_CODE_DIR="/path/to/your/project"
+# Large: reference data, Nextflow work directory, results.
+export CRETARGET_DATA_DIR="/path/to/large/storage"
+
+# --- creTarget's own caches ------------------------------------------------
+# Downloadable assets (model checkpoints, ATAC peaks, reference genome) go
+# here rather than ~/.cretarget, keeping several GB off the smaller
+# filesystem. This environment variable takes precedence over any [cache].dir
+# in the config file.
+export CRETARGET_CACHE_DIR="${CRETARGET_DATA_DIR}/cache"
+
+# Keep the step-level config inside the project too, so `cretarget configure`
+# does not write to ~/.config and cannot be confused with another project's
+# settings. Unset it and the tool falls back to ~/.config/cretarget.
+export CRETARGET_CONFIG_DIR="${CRETARGET_CODE_DIR}/.cretarget_config"
+
+# --- Nextflow --------------------------------------------------------------
+# Intermediates. Hundreds of GB on a genome-wide run, so this belongs on the
+# large filesystem.
+export NXF_WORK="${CRETARGET_DATA_DIR}/work"
+
+# Nextflow's own assets/plugins cache, scoped to the project so it cannot
+# interact with the ~/.nextflow used by your other pipelines.
+export NXF_HOME="${CRETARGET_DATA_DIR}/.nextflow_home"
+
+# Where Singularity images are cached. Set this if your site has a stale or
+# unwritable NXF_SINGULARITY_CACHEDIR -- a container run fails with
+# "Failed to create Singularity cache directory" when it points somewhere
+# you cannot write.
+export NXF_SINGULARITY_CACHEDIR="${CRETARGET_DATA_DIR}/singularity_cache"
+
+# Driver JVM. Modest, because the driver mostly waits.
+export NXF_OPTS='-Xms500M -Xmx2G'
+
+# --- Conda (optional) ------------------------------------------------------
+# `conda activate` does not work in a non-interactive shell (a batch job)
+# unless conda.sh has been sourced first. Doing it here means the same
+# incantation works interactively and in a script.
+#
+# If your machine has more than one conda install, pick one explicitly --
+# mixing them in a single shell causes confusing failures.
+# export CRETARGET_CONDA_SH="/opt/miniconda3/etc/profile.d/conda.sh"
+if [ -n "${CRETARGET_CONDA_SH:-}" ] && [ -r "${CRETARGET_CONDA_SH}" ]; then
+    # shellcheck disable=SC1090
+    . "${CRETARGET_CONDA_SH}"
+fi
+
+# --- Python environment (optional) -----------------------------------------
+# Which interpreter creTarget is installed into. Leave unset if it is already
+# on PATH.
+# export CRETARGET_PYENV="/path/to/venv"
+if [ -n "${CRETARGET_PYENV:-}" ] && [ -r "${CRETARGET_PYENV}/bin/activate" ]; then
+    # shellcheck disable=SC1091
+    . "${CRETARGET_PYENV}/bin/activate"
+fi
+
+# --- Reference data --------------------------------------------------------
+# `cretarget setup-reference` populates the FASTA and the FlashFry index.
+# FlashFry itself is a separate download:
+#   https://github.com/mckennalab/FlashFry/releases
+export CRETARGET_FASTA="${CRETARGET_CACHE_DIR}/reference/hg38.fa"
+export CRETARGET_FLASHFRY_DB="${CRETARGET_CACHE_DIR}/reference/hg38_standard_cas9ngg_db"
+export CRETARGET_FLASHFRY_JAR="${CRETARGET_DATA_DIR}/tools/FlashFry-assembly-1.15.jar"
+
+# --- Optional steps --------------------------------------------------------
+# export CRETARGET_LAUNCH_SCRIPT="/path/to/launch-dCas9/launch-dCas9.py"
+# export CRETARGET_LAUNCH_PYTHON="/path/to/torch-env/bin/python"
+# export CRETARGET_CKPT_DIR="${CRETARGET_CACHE_DIR}/models"
+# export CRETARGET_SEED_FINDER_DIR="/path/to/seed-finder-lite"
+
+mkdir -p "${CRETARGET_DATA_DIR}"/{cache,work,results} \
+         "${CRETARGET_CODE_DIR}"/{inputs,logs} 2>/dev/null
+
+echo "creTarget environment loaded."
+echo "  code    : ${CRETARGET_CODE_DIR}"
+echo "  data    : ${CRETARGET_DATA_DIR}"
+echo "  cache   : ${CRETARGET_CACHE_DIR}"
+echo "  work    : ${NXF_WORK}"
+echo "  python  : $(command -v python3 2>/dev/null || echo '<none>')"
+echo "  nextflow: $(command -v nextflow 2>/dev/null || echo '<none>')"
+echo
+echo "Open a new shell to discard all of this."
