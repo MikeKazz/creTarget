@@ -4,6 +4,63 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6]
+
+### Changed
+- **seed-finder-lite now runs once over the whole guide table, not once per
+  chunk.** Its batch mode scans the promoterome a single time and then matches
+  every guide by dictionary lookup, so cost is essentially independent of guide
+  count: measured at ~25 s for 20 guides and ~25 s for 2,000. Invoking it per
+  chunk paid that fixed scan on every chunk -- at `--chunk_size 1000` a
+  genome-wide run would have spent on the order of a month re-reading the same
+  212 MB of sequence. The step now sits after collation.
+  - `guides.ranked.tsv` is published on every run. `--run_seed_finder` adds
+    `guides.final.tsv` rather than replacing the ranked table.
+  - `--seed_finder_max_guides N` splits the work into tasks of at most N
+    guides, for cases where one task cannot finish inside its walltime. Each
+    shard repeats the promoterome scan, so a low shard count is the point.
+    Verified to produce output byte-identical to the single-task path.
+- **The step streams the guide table instead of loading it.** It previously
+  read the table with `pandas.read_csv`, which was fine for one chunk and
+  impossible for a collated genome-wide table of tens of GB. Both passes now
+  stream, and memory tracks the number of guides that actually have a hit
+  rather than the number of guides.
+- `guide_id` now always ends in the row index
+  (`<region>_<start>_<end>_<orientation>_<n>`). It previously appended a
+  `_dupN` suffix only on collision, which needed a global de-duplication pass
+  over the whole table. This changes the `guide_id` values in
+  `seed_finder/*_raw_hits.csv`.
+- `SEED_FINDER`'s default walltime is raised to 12 h and its CPU request
+  lowered to 1, reflecting one whole-table task rather than many small ones.
+
+### Added
+- **An install check for seed-finder-lite, run before the real scan.** It asks
+  the installed tool to recover two real Cas9 sites taken from its own promoter
+  reference, one per strand.
+
+  This exists because of a defect found in seed-finder-lite itself: in the
+  batch scanner, guides are indexed only under
+  `reverse_complement(guide[-min_seed_length:])`, and the plus-strand-PAM loop
+  looks up that same key while scoring against `guide_rc`. That loop therefore
+  matches nothing, and the tool reports only hits whose protospacer lies on the
+  minus strand -- exiting 0, with plausible-looking output, while missing
+  roughly half of all true hits. Measured against sites taken verbatim from the
+  tool's own reference: 0/40 plus-strand sites recovered, 40/40 minus-strand.
+  No amount of checking creTarget's own code would have caught it, and the only
+  visible symptom is that every reported hit carries the same strand.
+
+  If the check fails, the run stops and the error names the cause.
+  `--seed_finder_skip_check` bypasses it; `cretarget seed-finder-check
+  --seed-finder-dir ...` runs it standalone.
+- `seed-finder-lite`'s version is recorded in `software_versions.yml`, read
+  from a `VERSION` file at the root of its directory if present.
+- `pyfaidx` added to `assets/environment.yml`. seed-finder-lite imports it to
+  read its promoter reference, so `--run_seed_finder` previously failed under
+  `-profile conda` and the container profiles unless `--seed_finder_python`
+  pointed at an interpreter outside the environment. (biopython is not needed:
+  the bundled reference is plain gzip, which seed-finder-lite decompresses
+  itself.)
+
 ## [0.2.5]
 
 ### Added

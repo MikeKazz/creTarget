@@ -109,10 +109,11 @@ nextflow run MikeKazz/creTarget \
 At least one of `--snp_bed` / `--enhancer_bed` is required; both may be given
 together.
 
-Output is `results/guides.ranked.tsv` (or `guides.final.tsv` with
-`--run_seed_finder`): one row per candidate guide, annotated with all FlashFry
-scores, genome coordinates, hard-filter results, and `rank` (1 = best, per
-target; `exclude (<reason>)` if it failed a filter).
+Output is `results/guides.ranked.tsv`: one row per candidate guide, annotated
+with all FlashFry scores, genome coordinates, hard-filter results, and `rank`
+(1 = best, per target; `exclude (<reason>)` if it failed a filter).
+`--run_seed_finder` adds `results/guides.final.tsv`, the same table plus four
+seed-screening columns; the ranked table is published either way.
 
 ### Common options
 
@@ -129,6 +130,7 @@ target; `exclude (<reason>)` if it failed a filter).
 | `--atac_narrowpeak` | none | narrowPeak file; adds `distance_to_atac_summit` |
 | `--run_launch_dcas9` | off | Add launch-dCas9 efficacy scoring |
 | `--run_seed_finder` | off | Add seed-finder-lite off-target/TSS columns |
+| `--seed_finder_max_guides` | none | Split seed-finder into tasks of <= N guides |
 
 Run `nextflow run MikeKazz/creTarget --help` for the full list.
 
@@ -172,6 +174,12 @@ nextflow run MikeKazz/creTarget ... --atac_narrowpeak ~/.cretarget/atac_peaks/k5
 
 ### Optional: seed-finder-lite
 
+Asks a different question from FlashFry: not *where else could this guide
+cut*, but *where else could it sit on a promoter and repress*. A perfect
+PAM-proximal seed next to any NGG is enough to recruit dCas9, so this screens
+every guide's seed against ±2 kb windows around all annotated TSSs. It is
+orthogonal to FlashFry's cutting-oriented scores, not a substitute for them.
+
 Requires a separate install (Zenodo DOI
 [10.5281/zenodo.21599135](https://doi.org/10.5281/zenodo.21599135)).
 
@@ -186,6 +194,28 @@ nextflow run MikeKazz/creTarget ... \
 `--seed_finder_min_length` and `--seed_finder_tss_window` have no defaults on
 purpose: they change what the screen means, so choose them deliberately.
 
+This step runs **once over the whole guide table**, not per chunk.
+seed-finder-lite scans the promoterome a single time and then matches every
+guide by dictionary lookup, so its cost barely moves with guide count --
+measured at ~25 s for 20 guides and ~25 s for 2,000. Per-chunk invocation paid
+that fixed scan on every chunk. The step streams the table rather than loading
+it, so running it over a genome-wide table costs time, not memory.
+`--seed_finder_max_guides N` splits it into tasks of at most N guides if one
+task cannot finish inside its walltime; each shard repeats the scan, so keep
+the shard count low.
+
+Before the real run, creTarget asks the installed tool to recover two real
+Cas9 sites taken from its own promoter reference, one on each strand. A build
+whose plus-strand scan indexes guides under the reverse complement of their
+seed reports only minus-strand hits -- it exits 0 and returns plausible
+numbers while missing roughly half of all true hits, which no check of
+creTarget's own code would catch. If your install fails this, upgrade it; the
+error names the cause. `--seed_finder_skip_check` bypasses it, and
+`cretarget seed-finder-check --seed-finder-dir ...` runs it on its own.
+
+A `VERSION` file at the root of your seed-finder-lite directory is recorded in
+`software_versions.yml`; without one the provenance record says `unknown`.
+
 ## How it works
 
 1. **Prep regions** — parse and validate targets, flag linked neighbours, pad
@@ -199,9 +229,9 @@ purpose: they change what the screen means, so choose them deliberately.
 5. **launch-dCas9** *(optional)* — CNN on-target efficacy. *(per chunk)*
 6. **Rank** — hard filters, weighted composite score, per-target rank.
    *(per chunk)*
-7. **seed-finder-lite** *(optional)* — off-target/TSS summary columns.
-   *(per chunk)*
-8. **Collate** — stream per-chunk tables into one output file.
+7. **Collate** — stream per-chunk tables into `guides.ranked.tsv`.
+8. **seed-finder-lite** *(optional)* — promoter-proximal seed screening over
+   the collated table, producing `guides.final.tsv`. *(once, not per chunk)*
 
 Ranking is per-`region_id`, and every guide for a region lands in the same
 chunk, so per-chunk ranking is exactly equivalent to ranking globally. This is
@@ -260,10 +290,10 @@ software.
 solve, no version skew between users:
 
 ```bash
-nextflow run MikeKazz/creTarget -r v0.2.5 -profile slurm,singularity ...
+nextflow run MikeKazz/creTarget -r v0.2.6 -profile slurm,singularity ...
 ```
 
-It defaults to `ghcr.io/mikekazz/cretarget:0.2.5`; override with
+It defaults to `ghcr.io/mikekazz/cretarget:0.2.6`; override with
 `--container_image`. The `conda` profile builds the same pinned environment
 from `assets/environment.yml` instead; if conda's solver is slow, use
 `-profile micromamba` (same environment, a solver that handles it in seconds). `--queue` and

@@ -106,7 +106,7 @@ command -v nextflow  >/dev/null || { echo "ERROR: nextflow not on PATH"  >&2; ex
 [ -r "$FLASHFRY_DB" ]          || { echo "ERROR: no FlashFry index at $FLASHFRY_DB" >&2; exit 1; }
 [ -r "${FLASHFRY_DB}.header" ] || { echo "ERROR: no index header at ${FLASHFRY_DB}.header" >&2; exit 1; }
 
-nextflow run MikeKazz/creTarget -r v0.2.5 \
+nextflow run MikeKazz/creTarget -r v0.2.6 \
     -profile "${PROFILE}" \
     -resume \
     --enhancer_bed "${TARGETS}" \

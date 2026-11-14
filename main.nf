@@ -50,6 +50,9 @@ def helpMessage() {
         --seed_finder_dir         seed-finder-lite directory
         --seed_finder_min_length  Minimum exact-match seed length (no default)
         --seed_finder_tss_window  Max bp from a TSS to count as a hit (no default)
+        --seed_finder_python      Python with pyfaidx, if not this environment
+        --seed_finder_max_guides  Split into tasks of <= N guides (default: one task)
+        --seed_finder_skip_check  Skip the both-orientations install check
 
     Output:
       --outdir                  Output directory                       [${params.outdir}]
@@ -97,6 +100,19 @@ def validateParams() {
         }
         if (params.seed_finder_tss_window == null) {
             errors << "--run_seed_finder requires --seed_finder_tss_window (no default)."
+        }
+        if (params.seed_finder_max_guides != null &&
+                (params.seed_finder_max_guides as int) < 1) {
+            errors << "--seed_finder_max_guides must be >= 1 (omit it to run one task)."
+        }
+    }
+    if (!params.run_seed_finder) {
+        // Catch a flag set without the step enabled, rather than ignoring it.
+        if (params.seed_finder_max_guides != null) {
+            errors << "--seed_finder_max_guides has no effect without --run_seed_finder."
+        }
+        if (params.seed_finder_skip_check) {
+            errors << "--seed_finder_skip_check has no effect without --run_seed_finder."
         }
     }
 

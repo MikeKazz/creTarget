@@ -10,10 +10,22 @@
  *   FLASHFRY_DISCOVER_SCORE  \
  *   ANNOTATE                  |  all per-chunk, fully parallel,
  *   LAUNCH_DCAS9 (optional)   |  no cross-chunk synchronization
- *   RANK                      |
- *   SEED_FINDER (optional)   /
+ *   RANK                      /
  *        |
- *   collectFile -> one output table
+ *   collectFile -> guides.ranked.tsv
+ *        |
+ *   SEED_FINDER (optional, ONCE over the whole table)
+ *        |
+ *   collectFile -> guides.final.tsv
+ *
+ * SEED_FINDER is deliberately NOT per-chunk. seed-finder-lite's batch mode
+ * scans the promoterome once and then matches every guide by dictionary
+ * lookup, so its cost barely moves with guide count (~25 s for 20 guides,
+ * ~25 s for 2,000). Running it per chunk paid that scan on every chunk; at
+ * chunk_size 1000 a genome-wide run would have spent weeks re-reading the
+ * same 212 MB. It therefore sits after collation, where one invocation covers
+ * every guide. The step streams the collated table rather than loading it, so
+ * this does not trade runtime for memory.
  *
  * Everything downstream of splitting is scoped to a single region_id, and
  * every guide for a region lands in the same chunk, so ranking is correct
@@ -104,31 +116,15 @@ workflow CRETARGET {
     RANK(ch_for_rank)
     ch_versions = ch_versions.mix(RANK.out.versions.first())
 
-    ch_final = RANK.out.ranked
-
     //
-    // Optional seed-finder-lite off-target / TSS screening.
-    //
-    if (params.run_seed_finder) {
-        SEED_FINDER(
-            RANK.out.ranked,
-            Channel.fromPath(params.seed_finder_dir, type: 'dir', checkIfExists: true).first()
-        )
-        ch_final = SEED_FINDER.out.final_table
-        ch_versions = ch_versions.mix(SEED_FINDER.out.versions.first())
-    }
-
-    //
-    // One table out. collectFile streams the per-chunk files together and
-    // keeps a single header, so this stays cheap even with thousands of
+    // Collate the per-chunk ranked tables. collectFile streams them together
+    // and keeps a single header, so this stays cheap even with thousands of
     // chunks -- nothing is ever all in memory at once.
     //
-    def output_name = params.run_seed_finder ? 'guides.final.tsv' : 'guides.ranked.tsv'
-
-    ch_collected = ch_final
+    ch_ranked = RANK.out.ranked
         .map { chunk_id, table -> table }
         .collectFile(
-            name: output_name,
+            name: 'guides.ranked.tsv',
             storeDir: params.outdir,
             keepHeader: true,
             skip: 1,
@@ -152,6 +148,49 @@ workflow CRETARGET {
                 m.find() ? String.format('%09d', m.group(1) as Integer) : f.name
             }
         )
+
+    //
+    // Optional seed-finder-lite off-target / TSS screening, over the collated
+    // table. Sharding is opt-in: each shard repeats the promoterome scan, so
+    // it is only worth it when one task cannot hold the hit summary or finish
+    // inside its walltime.
+    //
+    ch_collected = ch_ranked
+
+    if (params.run_seed_finder) {
+        ch_seed_input = params.seed_finder_max_guides
+            ? ch_ranked.splitText(
+                  by: params.seed_finder_max_guides as int,
+                  keepHeader: true,
+                  file: true
+              )
+            : ch_ranked
+
+        SEED_FINDER(
+            ch_seed_input,
+            Channel.fromPath(params.seed_finder_dir, type: 'dir', checkIfExists: true).first()
+        )
+        ch_versions = ch_versions.mix(SEED_FINDER.out.versions.first())
+
+        /*
+         * Collated even when there is a single shard: one code path, and the
+         * published name stays the same either way. The sort mirrors the
+         * ranked collation above -- numeric by shard index, never by path,
+         * because a work-directory hash in the path would make output order
+         * vary between otherwise identical runs.
+         */
+        ch_collected = SEED_FINDER.out.final_table
+            .collectFile(
+                name: 'guides.final.tsv',
+                storeDir: params.outdir,
+                keepHeader: true,
+                skip: 1,
+                sort: { f ->
+                    def m = (f.name =~ /\.(\d+)\./)
+                    m.find() ? String.format('%09d', m.group(1) as Integer) : f.name
+                }
+            )
+    }
 
     //
     // Provenance record.

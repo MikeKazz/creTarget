@@ -50,8 +50,12 @@ check sbatch.revision     "$NEW" "$(sed -n 's|.*-r v\([0-9.]*\) .*|\1|p' assets/
 
 # Catch any reference the targeted seds above did not know about. A stale pin
 # in a template is worse than a stale comment: it silently runs the old code.
-stale=$(grep -rln "${OLD}" --exclude-dir=.git --exclude-dir=__pycache__ \
-            --exclude=CHANGELOG.md --exclude=bump_version.sh . 2>/dev/null || true)
+# -F because the version's dots are regex wildcards otherwise: "0.2.5" then
+# matches "0" + anything + "2" + anything + "5" and reports files that never
+# mentioned the old version. A check that cries wolf gets ignored.
+stale=$(grep -rlnF "${OLD}" --exclude-dir=.git --exclude-dir=__pycache__ \
+            --exclude-dir=*.egg-info --exclude=CHANGELOG.md \
+            --exclude=bump_version.sh --exclude=.nextflow.log . 2>/dev/null || true)
 if [ -n "$stale" ]; then
     printf '  WARN %-28s %s\n' "still mention ${OLD}:" "$(echo "$stale" | tr '\n' ' ')"
     echo "       check each one -- a historical comment is fine, a pin is not."

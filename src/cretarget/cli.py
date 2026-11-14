@@ -79,6 +79,20 @@ def cmd_seed_finder(args):
     seed_finder_step.run(args)
 
 
+def cmd_seed_finder_check(args):
+    config = cfg.load_config()
+    args.seed_finder_dir = (
+        cfg.expand(args.seed_finder_dir)
+        or cfg.require_path(config, "seed_finder", "dir")
+    )
+    args.python_bin = (
+        cfg.expand(args.python_bin)
+        or cfg.get_path(config, "seed_finder", "python_bin")
+        or None
+    )
+    seed_finder_step.run_check(args)
+
+
 def cmd_coords_to_bed(args):
     coords_to_bed_step.run(args)
 
@@ -149,6 +163,12 @@ def build_parser() -> argparse.ArgumentParser:
                        help="add seed-finder-lite off-target/TSS columns")
     seed_finder_step.add_arguments(p)
     p.set_defaults(func=cmd_seed_finder)
+
+    p = sub.add_parser(
+        "seed-finder-check",
+        help="verify a seed-finder-lite install finds both strands")
+    seed_finder_step.add_check_arguments(p)
+    p.set_defaults(func=cmd_seed_finder_check)
 
     p = sub.add_parser("coords-to-bed",
                        help="extract chr:start-end values from a table into BED")
