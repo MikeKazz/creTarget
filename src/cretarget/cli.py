@@ -67,30 +67,25 @@ def cmd_score_launch_dcas9(args):
 
 def cmd_seed_finder(args):
     config = cfg.load_config()
-    args.seed_finder_dir = (
-        cfg.expand(args.seed_finder_dir)
-        or cfg.require_path(config, "seed_finder", "dir")
+    args.promoter_fa = (
+        cfg.expand(args.promoter_fa)
+        or cfg.get_path(config, "seed_finder", "promoter_fa")
+        or None
     )
-    args.python_bin = (
-        cfg.expand(args.python_bin)
-        or cfg.get_path(config, "seed_finder", "python_bin")
+    args.tss_table = (
+        cfg.expand(args.tss_table)
+        or cfg.get_path(config, "seed_finder", "tss_table")
         or None
     )
     seed_finder_step.run(args)
 
 
-def cmd_seed_finder_check(args):
+def cmd_build_seed_reference(args):
     config = cfg.load_config()
-    args.seed_finder_dir = (
-        cfg.expand(args.seed_finder_dir)
-        or cfg.require_path(config, "seed_finder", "dir")
-    )
-    args.python_bin = (
-        cfg.expand(args.python_bin)
-        or cfg.get_path(config, "seed_finder", "python_bin")
-        or None
-    )
-    seed_finder_step.run_check(args)
+    fasta = cfg.expand(args.fasta) or cfg.require_path(config, "reference", "fasta")
+    fetch.build_seed_reference(
+        fasta=fasta, gtf=cfg.expand(args.gtf) or None, dest=args.outdir,
+        force=args.force, config=config)
 
 
 def cmd_coords_to_bed(args):
@@ -165,10 +160,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_seed_finder)
 
     p = sub.add_parser(
-        "seed-finder-check",
-        help="verify a seed-finder-lite install finds both strands")
-    seed_finder_step.add_check_arguments(p)
-    p.set_defaults(func=cmd_seed_finder_check)
+        "build-seed-reference",
+        help="build the promoter-window reference for seed screening")
+    p.add_argument("--fasta", default=None,
+                   help="genome FASTA (a .fai alongside it is required)")
+    p.add_argument("--gtf", default=None,
+                   help=f"gene annotation GTF (default: download GENCODE "
+                        f"release {fetch.GENCODE_RELEASE})")
+    p.add_argument("--outdir", default=None)
+    p.add_argument("--force", action="store_true")
+    p.set_defaults(func=cmd_build_seed_reference)
 
     p = sub.add_parser("coords-to-bed",
                        help="extract chr:start-end values from a table into BED")

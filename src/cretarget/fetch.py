@@ -14,7 +14,9 @@ fail with a message telling the user which command to run from a networked
 node -- never by silently attempting a download mid-run.
 """
 
+import gzip
 import hashlib
+import json
 import shutil
 import subprocess
 import sys
@@ -313,6 +315,266 @@ def _safe_extract(tar: tarfile.TarFile, dest: Path) -> None:
                 f"outside {dest}"
             )
     tar.extractall(dest)
+
+
+# --------------------------------------------------------------------------
+# Promoter-proximal seed reference
+#
+# Built rather than hosted. The two files seed screening needs -- a TSS table
+# and a FASTA of promoter windows -- are derived entirely from a GENCODE
+# annotation plus the hg38 FASTA that creTarget already requires, so there is
+# nothing to host, nothing to keep alive, and the exact annotation release is
+# recorded in the run manifest instead of being an opaque property of a
+# downloaded blob.
+#
+# The window recipe reproduces seed-finder-lite's published reference exactly
+# (verified against it for all 24 chromosomes): take +/-2 kb around every
+# annotated TSS, merge overlapping windows per chromosome, then pad each merged
+# window by 23 bp -- one protospacer plus PAM -- so a site straddling a
+# boundary is not truncated. chrM is excluded: at 16.6 kb, +/-2 kb windows
+# would blanket most of it, and CRISPRi on mtDNA is not a meaningful screen.
+# --------------------------------------------------------------------------
+
+GENCODE_RELEASE = "44"
+GENCODE_GTF_URL = (
+    f"https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/"
+    f"release_{GENCODE_RELEASE}/gencode.v{GENCODE_RELEASE}.annotation.gtf.gz"
+)
+
+SEED_REFERENCE_ATTRIBUTION = """\
+The promoter-proximal seed screen, and the design of the promoter-window
+reference it scans, are from seed-finder-lite (Kazemi, M.;
+doi:10.5281/zenodo.21599135). Gene annotations are GENCODE, which is
+distributed under its own terms -- see https://www.gencodegenes.org/.
+"""
+
+# Standard assembled chromosomes. Scaffolds and patches are left out: a seed
+# hit on an unplaced contig is not actionable, and including them would inflate
+# the scan for no gain.
+SEED_REFERENCE_CHROMS = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
+
+
+def seed_reference_dir(config: dict | None = None) -> Path:
+    return cfg.cache_dir(config) / "seed_reference"
+
+
+def _parse_gencode_tss(gtf_path: Path):
+    """(chrom, tss, gene_name) for every gene entry.
+
+    The TSS is the 5'-most base: the start for a + strand gene, the end for a
+    - strand one. Getting that backwards would put every minus-strand gene's
+    promoter at the wrong end of the gene.
+    """
+    rows = []
+    opener = gzip.open if str(gtf_path).endswith(".gz") else open
+    with opener(gtf_path, "rt") as handle:
+        for line in handle:
+            if line.startswith("#"):
+                continue
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) < 9 or fields[2] != "gene":
+                continue
+            chrom = fields[0]
+            if not chrom.startswith("chr"):
+                chrom = "chr" + chrom
+            start, end, strand = int(fields[3]), int(fields[4]), fields[6]
+            tss = start if strand == "+" else end
+            gene_name = "?"
+            for item in fields[8].split(";"):
+                item = item.strip()
+                if item.startswith("gene_name "):
+                    gene_name = item.split(" ", 1)[1].strip().strip('"')
+                    break
+            rows.append((chrom, tss, gene_name))
+    return rows
+
+
+def _promoter_windows(tss_rows, chroms, half_width, pad):
+    """Merged, padded promoter windows as (chrom, start_1based, end_1based)."""
+    by_chrom: dict[str, list[tuple[int, int]]] = {}
+    allowed = set(chroms)
+    for chrom, tss, _gene in tss_rows:
+        if chrom not in allowed:
+            continue
+        by_chrom.setdefault(chrom, []).append(
+            (max(1, tss - half_width), tss + half_width))
+
+    windows = []
+    for chrom in chroms:
+        intervals = by_chrom.get(chrom)
+        if not intervals:
+            continue
+        intervals.sort()
+        current_start, current_end = intervals[0]
+        merged = []
+        for start, end in intervals[1:]:
+            # +1 because these are inclusive: windows that abut should merge.
+            if start <= current_end + 1:
+                current_end = max(current_end, end)
+            else:
+                merged.append((current_start, current_end))
+                current_start, current_end = start, end
+        merged.append((current_start, current_end))
+        for start, end in merged:
+            windows.append((chrom, max(1, start - pad), end + pad))
+    return windows
+
+
+def _read_fai(fasta: Path) -> dict:
+    fai = Path(str(fasta) + ".fai")
+    if not fai.exists():
+        raise SystemExit(
+            f"ERROR: no FASTA index at {fai}\n"
+            f"Run: samtools faidx {fasta}"
+        )
+    lengths = {}
+    with open(fai) as handle:
+        for line in handle:
+            fields = line.split("\t")
+            if len(fields) >= 2:
+                lengths[fields[0]] = int(fields[1])
+    return lengths
+
+
+def build_seed_reference(fasta: str, gtf: str | None = None,
+                         dest: Path | None = None, force: bool = False,
+                         config: dict | None = None) -> Path:
+    """Build the TSS table and promoter-window FASTA for seed screening."""
+    from . import seed_scan
+
+    dest = Path(dest) if dest else seed_reference_dir(config)
+    dest.mkdir(parents=True, exist_ok=True)
+    tss_path = dest / "tss_table.tsv"
+    promoter_path = dest / "promoter_windows.fa.gz"
+    provenance_path = dest / "provenance.json"
+
+    if not force and tss_path.exists() and promoter_path.exists():
+        print(f"Seed reference already present in {dest} (use --force to rebuild)",
+              file=sys.stderr)
+        return dest
+
+    _require_tool("bedtools", "bedtools")
+    # Resolved so the provenance record names an unambiguous path rather than
+    # whatever was relative to the caller's working directory.
+    fasta = Path(cfg.expand(str(fasta))).resolve()
+    if not fasta.is_file():
+        raise SystemExit(f"ERROR: genome FASTA not found: {fasta}")
+    chrom_lengths = _read_fai(fasta)
+
+    if gtf:
+        gtf_path = Path(cfg.expand(str(gtf)))
+        gtf_source = str(gtf_path)
+        if not gtf_path.is_file():
+            raise SystemExit(f"ERROR: GTF not found: {gtf_path}")
+    else:
+        gtf_path = reference_dir(config) / f"gencode.v{GENCODE_RELEASE}.annotation.gtf.gz"
+        gtf_source = GENCODE_GTF_URL
+        if not gtf_path.exists():
+            _download(GENCODE_GTF_URL, gtf_path,
+                      f"GENCODE release {GENCODE_RELEASE} annotation (~50 MB)")
+
+    print(f"Reading gene annotations from {gtf_path.name}", file=sys.stderr)
+    tss_rows = _parse_gencode_tss(gtf_path)
+    if not tss_rows:
+        raise SystemExit(
+            f"ERROR: no gene entries found in {gtf_path}\n"
+            f"Is this a GENCODE/Ensembl GTF? A GFF3 will not parse here."
+        )
+    tss_rows.sort(key=lambda r: (r[0], r[1]))
+    with open(tss_path, "w") as handle:
+        handle.write("chr\ttss\tgene_name\n")
+        for chrom, tss, gene in tss_rows:
+            handle.write(f"{chrom}\t{tss}\t{gene}\n")
+    print(f"  {len(tss_rows):,} TSSs -> {tss_path.name}", file=sys.stderr)
+
+    windows = _promoter_windows(
+        tss_rows, SEED_REFERENCE_CHROMS,
+        seed_scan.PROMOTER_HALF_WIDTH, seed_scan.PROMOTER_PAD)
+    if not windows:
+        raise SystemExit(
+            "ERROR: no promoter windows built. The GTF's chromosome names did "
+            "not match any of chr1..chr22, chrX, chrY."
+        )
+
+    # BED is 0-based half-open; the window name carries 1-based inclusive
+    # coordinates, which is what the scanner parses to remap hits.
+    bed_path = dest / "promoter_windows.bed"
+    skipped = 0
+    with open(bed_path, "w") as handle:
+        for chrom, start_1, end_1 in windows:
+            limit = chrom_lengths.get(chrom)
+            if limit is None:
+                skipped += 1
+                continue
+            clipped_end = min(end_1, limit)
+            if clipped_end - start_1 + 1 < seed_scan.SITE_LENGTH:
+                continue
+            handle.write(
+                f"{chrom}\t{start_1 - 1}\t{clipped_end}\t"
+                f"prom|{chrom}|{start_1}|{clipped_end}\n")
+    if skipped:
+        print(f"  note: {skipped} window(s) on chromosomes absent from the "
+              f"FASTA were skipped", file=sys.stderr)
+
+    print(f"  extracting {len(windows):,} promoter windows with bedtools",
+          file=sys.stderr)
+    plain_fa = dest / "promoter_windows.fa"
+    with open(plain_fa, "w") as out:
+        result = subprocess.run(
+            ["bedtools", "getfasta", "-fi", str(fasta), "-bed", str(bed_path),
+             "-nameOnly"],
+            stdout=out, stderr=subprocess.PIPE, text=True)
+    if result.returncode != 0:
+        plain_fa.unlink(missing_ok=True)
+        raise SystemExit(
+            f"ERROR: bedtools getfasta failed (exit {result.returncode}):\n"
+            f"{result.stderr}")
+
+    with open(plain_fa, "rb") as src, gzip.open(promoter_path, "wb") as out:
+        shutil.copyfileobj(src, out)
+    plain_fa.unlink()
+    bed_path.unlink()
+
+    provenance = {
+        "gencode_release": None if gtf else GENCODE_RELEASE,
+        "gtf_source": gtf_source,
+        "gtf_sha256": sha256_of(gtf_path),
+        "genome_fasta": str(fasta),
+        "tss_count": len(tss_rows),
+        "promoter_window_count": len(windows),
+        "promoter_half_width_bp": seed_scan.PROMOTER_HALF_WIDTH,
+        "promoter_pad_bp": seed_scan.PROMOTER_PAD,
+        "chromosomes": SEED_REFERENCE_CHROMS,
+        "cretarget_version": __import__("cretarget").__version__,
+    }
+    provenance_path.write_text(json.dumps(provenance, indent=2) + "\n")
+
+    print(f"\nSeed reference ready in {dest}", file=sys.stderr)
+    print(SEED_REFERENCE_ATTRIBUTION, file=sys.stderr)
+    return dest
+
+
+def require_seed_reference(promoter_fa: str | None = None,
+                           tss_table: str | None = None,
+                           config: dict | None = None):
+    """Resolve the seed reference, explaining how to build it if absent."""
+    if promoter_fa and tss_table:
+        promoter, tss = Path(cfg.expand(promoter_fa)), Path(cfg.expand(tss_table))
+    else:
+        base = seed_reference_dir(config)
+        promoter = Path(cfg.expand(promoter_fa)) if promoter_fa else base / "promoter_windows.fa.gz"
+        tss = Path(cfg.expand(tss_table)) if tss_table else base / "tss_table.tsv"
+    missing = [str(p) for p in (promoter, tss) if not p.is_file()]
+    if missing:
+        raise SystemExit(
+            "ERROR: the promoter-proximal seed reference is not built.\n"
+            f"  missing: {', '.join(missing)}\n\n"
+            "Build it once with:\n"
+            "  cretarget build-seed-reference --fasta /path/to/hg38.fa\n\n"
+            "It needs bedtools and a GENCODE GTF (downloaded automatically, or "
+            "pass --gtf)."
+        )
+    return promoter, tss
 
 
 def _require_tool(name: str, package_hint: str) -> None:

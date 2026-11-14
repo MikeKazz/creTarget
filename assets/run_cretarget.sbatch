@@ -106,7 +106,7 @@ command -v nextflow  >/dev/null || { echo "ERROR: nextflow not on PATH"  >&2; ex
 [ -r "$FLASHFRY_DB" ]          || { echo "ERROR: no FlashFry index at $FLASHFRY_DB" >&2; exit 1; }
 [ -r "${FLASHFRY_DB}.header" ] || { echo "ERROR: no index header at ${FLASHFRY_DB}.header" >&2; exit 1; }
 
-nextflow run MikeKazz/creTarget -r v0.2.6 \
+nextflow run MikeKazz/creTarget -r v0.3.0 \
     -profile "${PROFILE}" \
     -resume \
     --enhancer_bed "${TARGETS}" \
@@ -127,6 +127,8 @@ nextflow run MikeKazz/creTarget -r v0.2.6 \
 #   --ckpt_dir      "${CRETARGET_CACHE_DIR}/models" \
 #
 #   --run_seed_finder \
-#   --seed_finder_dir /path/to/seed-finder-lite \
 #   --seed_finder_min_length 10 \
 #   --seed_finder_tss_window 1000
+#
+# The seed screen needs its promoter reference built once, beforehand:
+#   cretarget build-seed-reference --fasta "$REF_FASTA"

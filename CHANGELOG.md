@@ -4,6 +4,80 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0]
+
+Seed screening is now part of creTarget rather than a call out to a separately
+installed tool. This is a **breaking change** to the seed-screening flags.
+
+### Removed
+- `--seed_finder_dir`, `--seed_finder_python`, `--seed_finder_skip_check` and
+  the `cretarget seed-finder-check` subcommand. There is no external install to
+  point at, no interpreter to borrow, and no third-party build to validate at
+  runtime.
+- `pyfaidx` is no longer a dependency. The scan visits every promoter window
+  exactly once, so it needs no random access: the reference is read as a plain
+  gzip stream. That also removes the 212 MB decompression into a cache
+  directory, the `.fai` index, and the BioPython requirement that came with
+  reading block-gzipped FASTA.
+
+### Added
+- **A native seed scanner** (`cretarget.seed_scan`). Finds every site where a
+  guide's PAM-proximal seed matches exactly next to an NGG, within a window of
+  an annotated TSS, on either strand. Validated against the tool it replaces:
+  on the same inputs it produced **byte-identical hit sets** -- 728 hits on a
+  40-window reference, 29,338 hits for 2,000 guides against the full
+  promoterome -- with every field of every hit agreeing, at slightly lower
+  runtime. It is additionally tested against a brute-force implementation
+  written from the biological definition, across several seed lengths and
+  random fixtures.
+- **`cretarget build-seed-reference`** builds the promoter reference instead of
+  downloading one: a pinned GENCODE release plus the hg38 FASTA already
+  required, `bedtools getfasta`, and nothing hosted. The window recipe
+  reproduces seed-finder-lite's published reference exactly -- +/-2 kb around
+  each TSS, merged per chromosome, then padded by 23 bp -- verified to produce
+  the identical 49,497 windows on all 24 chromosomes. chrM is excluded, as in
+  the original. A `provenance.json` records the annotation release, the GTF's
+  SHA-256, the window geometry and the chromosome set, so the promoter
+  definition is reproducible from declared inputs rather than being an opaque
+  property of a blob.
+- The seed screen now runs in CI. It was previously untestable there, because
+  it needed a 66 MB external reference; building the reference from a synthetic
+  GTF over the CI mini-genome takes under a second. CI asserts that hits appear
+  on **both strands**, which is the visible symptom of the one-orientation
+  defect described below, plus the table-shape invariants.
+- `--seed_finder_all_guides`. By default only guides that pass the hard filters
+  are screened -- they are the only ones going into a library, and excluding
+  the rest cuts both the seed index and the work. Excluded guides get blank
+  seed columns rather than a count of 0, keeping "we looked and found nothing"
+  distinguishable from "we did not look".
+
+### Fixed
+- **Seed hits on one strand were never reported.** The external tool indexed
+  every guide under `reverse_complement(guide[-min_seed_length:])` and used
+  that single key for both scan branches, so the branch handling a
+  plus-strand protospacer could not match anything. Only sites whose
+  protospacer lay on the minus strand were ever found -- roughly half of all
+  true sites -- and the tool exited 0 with plausible-looking output. Measured
+  against sites taken verbatim from the tool's own reference: 0/40 plus-strand
+  recovered, 40/40 minus-strand.
+
+  The native scanner indexes both orientations and is pinned by tests that
+  fail if either side regresses. **Any seed-screening results produced before
+  this release are incomplete and should be regenerated.**
+- `strand` in the hit table now names the strand the **protospacer** lies on,
+  matching FlashFry and creTarget's own `orientation` column. The previous
+  value was inverted relative to both, so the two columns in one row disagreed.
+- The TSS table's header is detected rather than assumed. A headerless file
+  previously lost its first gene silently.
+
+### Changed
+- The hit table gains `pam_start` and `pam_end`. The PAM sits 3' of the
+  protospacer for a plus-strand hit and 5' of it for a minus-strand one, which
+  is not something a reader should have to reconstruct.
+- `SEED_FINDER`'s memory escalates on retry and its walltime is sized for one
+  whole-table task. Guides per task is bounded by the seed index, roughly 1 GB
+  per million guides.
+
 ## [0.2.6]
 
 ### Changed

@@ -205,6 +205,103 @@ jobs:
             --chunk_size 2 \
             --outdir results_ci
 
+      - name: Build a seed-screening reference and run the seed screen
+        # Exercisable in CI because the reference is BUILT from an annotation
+        # rather than downloaded: a synthetic GTF over the mini-genome gives a
+        # real promoter reference in under a second.
+        run: |
+          python - <<'EOF'
+          import random
+          random.seed(21)
+          with open("ci_genes.gtf", "w") as f:
+              f.write("##description: CI test annotation\n")
+              gid = 0
+              for chrom, length in [("chr1", 200000), ("chr2", 120000)]:
+                  for pos in range(8000, length - 8000, 24000):
+                      gid += 1
+                      strand = random.choice("+-")
+                      f.write(
+                          f'{chrom}\tCI\tgene\t{pos}\t{pos+3000}\t.\t{strand}\t.\t'
+                          f'gene_id "ENSG{gid:08d}"; gene_name "GENE{gid}"; '
+                          f'gene_type "protein_coding";\n'
+                      )
+          EOF
+          export CRETARGET_CACHE_DIR="$PWD/ci_cache"
+          cretarget build-seed-reference --fasta ci_ref/mini.fa --gtf ci_genes.gtf
+
+          nextflow run . -profile test,local \
+            --enhancer_bed ci_enh.txt \
+            --fasta ci_ref/mini.fa \
+            --flashfry_jar FlashFry.jar \
+            --flashfry_db ci_ref/mini_cas9ngg_db \
+            --chunk_size 2 \
+            --run_seed_finder \
+            --seed_finder_min_length 10 \
+            --seed_finder_tss_window 2000 \
+            --outdir results_seed
+
+      - name: Verify the seed screen found both orientations
+        # The regression this guards: a scanner that indexes each guide under
+        # only one orientation silently reports hits on a single strand and
+        # misses about half of all true sites, while exiting 0. A one-sided
+        # strand column is the visible symptom.
+        run: |
+          python - <<'EOF'
+          import collections, csv, glob, sys
+
+          hits_files = glob.glob("results_seed/seed_finder/*_raw_hits.csv")
+          assert len(hits_files) == 1, f"expected one hit table, got {hits_files}"
+          rows = list(csv.DictReader(open(hits_files[0])))
+          print(f"{len(rows)} seed hits")
+
+          problems = []
+          if not rows:
+              problems.append("the seed screen found no hits at all")
+          strands = collections.Counter(r["strand"] for r in rows)
+          print("strands:", dict(strands))
+          if set(strands) != {"+", "-"}:
+              problems.append(
+                  f"hits are not on both strands: {dict(strands)}. A scanner that "
+                  f"indexes guides under one orientation only looks exactly like "
+                  f"this and misses ~half of all true sites."
+              )
+
+          final = list(csv.DictReader(open("results_seed/guides.final.tsv"),
+                                      delimiter="\t"))
+          ranked = list(csv.DictReader(open("results_seed/guides.ranked.tsv"),
+                                       delimiter="\t"))
+          if len(final) != len(ranked):
+              problems.append(
+                  f"guides.final.tsv has {len(final)} rows but guides.ranked.tsv "
+                  f"has {len(ranked)}")
+          for column in ("seedfinder_hit_count", "seedfinder_closest_gene",
+                         "seedfinder_closest_tss_distance",
+                         "seedfinder_closest_seed_length"):
+              if final and column not in final[0]:
+                  problems.append(f"missing column {column} in guides.final.tsv")
+
+          # Guides excluded by the hard filters are not screened, and must be
+          # blank rather than reported as a confident zero.
+          if final and "passes_hard_filters" in final[0]:
+              for row in final:
+                  screened = row["passes_hard_filters"].strip().lower() in (
+                      "true", "1", "yes")
+                  blank = row["seedfinder_hit_count"] == ""
+                  if screened == blank:
+                      problems.append(
+                          f"screened/blank mismatch for {row.get('region_id')}: "
+                          f"passes={row['passes_hard_filters']!r} "
+                          f"count={row['seedfinder_hit_count']!r}")
+                      break
+
+          if problems:
+              print("\nFAILED:")
+              for problem in problems:
+                  print(" -", problem)
+              sys.exit(1)
+          print("\nseed screen OK")
+          EOF
+
       - name: Verify the outputs
         run: |
           python - <<'EOF'

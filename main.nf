@@ -46,13 +46,13 @@ def helpMessage() {
         --launch_script           Path to launch-dCas9.py
         --launch_python           Python from a conda env with torch
         --ckpt_dir                Checkpoint dir (see `cretarget fetch-models`)
-      --run_seed_finder         Add seed-finder-lite off-target/TSS columns
-        --seed_finder_dir         seed-finder-lite directory
+      --run_seed_finder         Add promoter-proximal seed screening columns
         --seed_finder_min_length  Minimum exact-match seed length (no default)
         --seed_finder_tss_window  Max bp from a TSS to count as a hit (no default)
-        --seed_finder_python      Python with pyfaidx, if not this environment
+        --seed_finder_promoter_fa Promoter-window FASTA (default: cached build)
+        --seed_finder_tss_table   TSS table (default: cached build)
         --seed_finder_max_guides  Split into tasks of <= N guides (default: one task)
-        --seed_finder_skip_check  Skip the both-orientations install check
+        --seed_finder_all_guides  Screen filtered-out guides too (default: no)
 
     Output:
       --outdir                  Output directory                       [${params.outdir}]
@@ -89,9 +89,6 @@ def validateParams() {
     }
 
     if (params.run_seed_finder) {
-        if (!params.seed_finder_dir) {
-            errors << "--run_seed_finder requires --seed_finder_dir."
-        }
         // Deliberately no defaults: these change what the screen means, so
         // the user has to choose them consciously.
         if (params.seed_finder_min_length == null) {
@@ -111,8 +108,8 @@ def validateParams() {
         if (params.seed_finder_max_guides != null) {
             errors << "--seed_finder_max_guides has no effect without --run_seed_finder."
         }
-        if (params.seed_finder_skip_check) {
-            errors << "--seed_finder_skip_check has no effect without --run_seed_finder."
+        if (params.seed_finder_all_guides) {
+            errors << "--seed_finder_all_guides has no effect without --run_seed_finder."
         }
     }
 

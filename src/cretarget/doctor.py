@@ -120,9 +120,16 @@ def run(args):
                 "python from a conda env with torch installed")
     print()
 
-    print("== Optional: seed-finder-lite off-target screening ==")
-    _check_file("seed_finder.dir", cfg.get_path(config, "seed_finder", "dir"), False,
-                "see Zenodo DOI 10.5281/zenodo.21599135")
+    print("== Optional: promoter-proximal seed screening ==")
+    seed_base = fetch.seed_reference_dir(config)
+    _check_file("seed_finder.promoter_fa",
+                cfg.get_path(config, "seed_finder", "promoter_fa")
+                or str(seed_base / "promoter_windows.fa.gz"), False,
+                "build it with `cretarget build-seed-reference --fasta hg38.fa`")
+    _check_file("seed_finder.tss_table",
+                cfg.get_path(config, "seed_finder", "tss_table")
+                or str(seed_base / "tss_table.tsv"), False,
+                "built alongside the promoter FASTA")
     print()
 
     print("== Optional: ATAC-seq peaks ==")

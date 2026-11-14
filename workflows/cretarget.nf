@@ -158,6 +158,20 @@ workflow CRETARGET {
     ch_collected = ch_ranked
 
     if (params.run_seed_finder) {
+        /*
+         * The promoter reference is built once with `cretarget
+         * build-seed-reference` and lives in the cache. Resolving it here
+         * rather than inside the process means a missing reference is a
+         * channel error at launch, not a task failure after the whole ranking
+         * stage has already run.
+         */
+        def cache_root = System.getenv('CRETARGET_CACHE_DIR')
+            ?: "${System.getProperty('user.home')}/.cretarget"
+        ch_seed_promoter_fa = params.seed_finder_promoter_fa
+            ?: "${cache_root}/seed_reference/promoter_windows.fa.gz"
+        ch_seed_tss_table = params.seed_finder_tss_table
+            ?: "${cache_root}/seed_reference/tss_table.tsv"
+
         ch_seed_input = params.seed_finder_max_guides
             ? ch_ranked.splitText(
                   by: params.seed_finder_max_guides as int,
@@ -168,7 +182,8 @@ workflow CRETARGET {
 
         SEED_FINDER(
             ch_seed_input,
-            Channel.fromPath(params.seed_finder_dir, type: 'dir', checkIfExists: true).first()
+            Channel.fromPath(ch_seed_promoter_fa, checkIfExists: true).first(),
+            Channel.fromPath(ch_seed_tss_table, checkIfExists: true).first()
         )
         ch_versions = ch_versions.mix(SEED_FINDER.out.versions.first())
 

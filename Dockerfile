@@ -1,14 +1,14 @@
 # creTarget runtime image.
 #
 # Build:
-#   docker build -t ghcr.io/mikekazz/cretarget:0.2.6 .
+#   docker build -t ghcr.io/mikekazz/cretarget:0.3.0 .
 #
 # Publish:
-#   docker push ghcr.io/mikekazz/cretarget:0.2.6
+#   docker push ghcr.io/mikekazz/cretarget:0.3.0
 #
 # Use:
 #   nextflow run MikeKazz/creTarget -profile slurm,singularity \
-#       --container_image ghcr.io/mikekazz/cretarget:0.2.6 ...
+#       --container_image ghcr.io/mikekazz/cretarget:0.3.0 ...
 #
 # This is the most portable way to run the pipeline: one image, no conda solve,
 # no version skew between users. It deliberately does NOT bundle FlashFry, the
@@ -24,7 +24,7 @@ LABEL org.opencontainers.image.title="creTarget" \
       org.opencontainers.image.description="CRISPRi guide RNA design for the noncoding genome" \
       org.opencontainers.image.source="https://github.com/MikeKazz/creTarget" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.version="0.2.6"
+      org.opencontainers.image.version="0.3.0"
 
 USER root
 # git is needed to pip-install creTarget from the repository; procps provides

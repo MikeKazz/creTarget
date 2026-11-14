@@ -117,6 +117,19 @@ java -Xmx32g -jar "$DATA_DIR/tools/FlashFry-assembly-1.15.jar" index \
 Indexing takes roughly an hour and wants 32 GB. Do it once; it is reused by
 every run.
 
+If you plan to use `--run_seed_finder`, build its promoter reference once.
+This needs `bedtools` and the FASTA from above, and downloads a pinned GENCODE
+annotation:
+
+```bash
+cd "$CODE_DIR/creTarget"
+cretarget build-seed-reference --fasta "$DATA_DIR/cache/reference/hg38.fa"
+```
+
+It writes a TSS table, a promoter-window FASTA and a `provenance.json`
+recording the annotation release into `$CRETARGET_CACHE_DIR/seed_reference`.
+Takes a few minutes, and is reused by every run.
+
 Verify:
 
 ```bash

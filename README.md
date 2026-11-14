@@ -11,8 +11,9 @@ Off-target and on-target scoring comes from
 [FlashFry](https://github.com/mckennalab/FlashFry), with optional CNN-based
 enhancer/promoter efficacy scoring via
 [launch-dCas9](https://github.com/Wancen/launch-dCas9), optional ATAC-seq
-chromatin-accessibility annotation, and optional off-target/TSS-proximity
-screening via seed-finder-lite.
+chromatin-accessibility annotation, and optional promoter-proximal seed
+screening for off-target repression (after
+[seed-finder-lite](https://doi.org/10.5281/zenodo.21599135)).
 
 Execution is handled by [Nextflow](https://nextflow.io), so the same command
 runs on your laptop, on SLURM, PBS/PBS Pro, SGE, or LSF — the scheduler is a
@@ -129,8 +130,9 @@ seed-screening columns; the ranked table is published either way.
 | `--max_mismatch` | 3 | FlashFry off-target search depth |
 | `--atac_narrowpeak` | none | narrowPeak file; adds `distance_to_atac_summit` |
 | `--run_launch_dcas9` | off | Add launch-dCas9 efficacy scoring |
-| `--run_seed_finder` | off | Add seed-finder-lite off-target/TSS columns |
-| `--seed_finder_max_guides` | none | Split seed-finder into tasks of <= N guides |
+| `--run_seed_finder` | off | Add promoter-proximal seed screening columns |
+| `--seed_finder_max_guides` | none | Split the seed screen into tasks of <= N guides |
+| `--seed_finder_all_guides` | off | Screen filtered-out guides too |
 
 Run `nextflow run MikeKazz/creTarget --help` for the full list.
 
@@ -172,49 +174,62 @@ cretarget fetch-atac --cell-type k562
 nextflow run MikeKazz/creTarget ... --atac_narrowpeak ~/.cretarget/atac_peaks/k562.narrowPeak
 ```
 
-### Optional: seed-finder-lite
+### Optional: promoter-proximal seed screening
 
-Asks a different question from FlashFry: not *where else could this guide
-cut*, but *where else could it sit on a promoter and repress*. A perfect
-PAM-proximal seed next to any NGG is enough to recruit dCas9, so this screens
-every guide's seed against ±2 kb windows around all annotated TSSs. It is
-orthogonal to FlashFry's cutting-oriented scores, not a substitute for them.
+This asks a different question from FlashFry. Not *where else could this guide
+cut*, but *where else could it sit on a promoter and repress*. dCas9 does not
+cut — it blocks transcription — and a guide only needs a perfect PAM-proximal
+seed next to any NGG to load onto DNA. If that happens over somebody's
+promoter, the gene is repressed whether or not the rest of the guide matches.
+FlashFry's mismatch-based scores do not capture that, so the two screens are
+complementary and neither replaces the other.
 
-Requires a separate install (Zenodo DOI
-[10.5281/zenodo.21599135](https://doi.org/10.5281/zenodo.21599135)).
+The approach, and the design of the promoter-window reference it scans, are
+from **seed-finder-lite** (Kazemi, M., DOI
+[10.5281/zenodo.21599135](https://doi.org/10.5281/zenodo.21599135)). The
+implementation here is creTarget's own.
+
+Build the reference once — it needs `bedtools` and the hg38 FASTA you already
+have:
+
+```bash
+cretarget build-seed-reference --fasta /path/to/hg38.fa
+```
+
+That downloads a pinned GENCODE annotation, derives a TSS table, and extracts
+±2 kb windows around every TSS (merged where they overlap, padded by 23 bp so
+a site straddling a boundary is not truncated). The GENCODE release and the
+GTF's checksum are written to `provenance.json` beside the reference, so the
+promoter definition is reproducible from declared inputs rather than being a
+property of a downloaded blob. Pass `--gtf` to use your own annotation.
+
+Then add the screen to a run:
 
 ```bash
 nextflow run MikeKazz/creTarget ... \
     --run_seed_finder \
-    --seed_finder_dir /path/to/seed-finder-lite \
     --seed_finder_min_length 8 \
     --seed_finder_tss_window 1000
 ```
 
 `--seed_finder_min_length` and `--seed_finder_tss_window` have no defaults on
-purpose: they change what the screen means, so choose them deliberately.
+purpose: they change what the screen means, so choose them deliberately. A
+window larger than 2000 finds nothing extra, because that is how far the
+reference extends; creTarget says so rather than silently capping it.
 
-This step runs **once over the whole guide table**, not per chunk.
-seed-finder-lite scans the promoterome a single time and then matches every
-guide by dictionary lookup, so its cost barely moves with guide count --
-measured at ~25 s for 20 guides and ~25 s for 2,000. Per-chunk invocation paid
-that fixed scan on every chunk. The step streams the table rather than loading
-it, so running it over a genome-wide table costs time, not memory.
-`--seed_finder_max_guides N` splits it into tasks of at most N guides if one
-task cannot finish inside its walltime; each shard repeats the scan, so keep
-the shard count low.
+**Only guides that pass the hard filters are screened**, since those are the
+only ones going into a library. Excluded guides get blank seed columns rather
+than a count of zero, so "we looked and found nothing" stays distinguishable
+from "we did not look". `--seed_finder_all_guides` screens everything.
 
-Before the real run, creTarget asks the installed tool to recover two real
-Cas9 sites taken from its own promoter reference, one on each strand. A build
-whose plus-strand scan indexes guides under the reverse complement of their
-seed reports only minus-strand hits -- it exits 0 and returns plausible
-numbers while missing roughly half of all true hits, which no check of
-creTarget's own code would catch. If your install fails this, upgrade it; the
-error names the cause. `--seed_finder_skip_check` bypasses it, and
-`cretarget seed-finder-check --seed-finder-dir ...` runs it on its own.
-
-A `VERSION` file at the root of your seed-finder-lite directory is recorded in
-`software_versions.yml`; without one the provenance record says `unknown`.
+The step runs **once over the whole guide table**, not per chunk. Cost is one
+pass over the reference and barely moves with guide count — the per-position
+work is a dictionary lookup whether there are twenty guides or two million —
+so per-chunk invocation paid that fixed pass on every chunk. The table is
+streamed and hits are written as they are found; the only thing held in memory
+is the seed index, at roughly 1 GB per million guides screened.
+`--seed_finder_max_guides N` splits the work into tasks of at most N guides
+when that becomes the constraint.
 
 ## How it works
 
@@ -230,8 +245,8 @@ A `VERSION` file at the root of your seed-finder-lite directory is recorded in
 6. **Rank** — hard filters, weighted composite score, per-target rank.
    *(per chunk)*
 7. **Collate** — stream per-chunk tables into `guides.ranked.tsv`.
-8. **seed-finder-lite** *(optional)* — promoter-proximal seed screening over
-   the collated table, producing `guides.final.tsv`. *(once, not per chunk)*
+8. **Seed screening** *(optional)* — promoter-proximal seed matches over the
+   collated table, producing `guides.final.tsv`. *(once, not per chunk)*
 
 Ranking is per-`region_id`, and every guide for a region lands in the same
 chunk, so per-chunk ranking is exactly equivalent to ranking globally. This is
@@ -290,10 +305,10 @@ software.
 solve, no version skew between users:
 
 ```bash
-nextflow run MikeKazz/creTarget -r v0.2.6 -profile slurm,singularity ...
+nextflow run MikeKazz/creTarget -r v0.3.0 -profile slurm,singularity ...
 ```
 
-It defaults to `ghcr.io/mikekazz/cretarget:0.2.6`; override with
+It defaults to `ghcr.io/mikekazz/cretarget:0.3.0`; override with
 `--container_image`. The `conda` profile builds the same pinned environment
 from `assets/environment.yml` instead; if conda's solver is slow, use
 `-profile micromamba` (same environment, a solver that handles it in seconds). `--queue` and
@@ -354,7 +369,7 @@ minutes rather than hours.
 
 ## Known limitations
 
-- FlashFry (JVM), launch-dCas9 (conda/torch), and seed-finder-lite are external
+- FlashFry (JVM) and launch-dCas9 (conda/torch) are external
   dependencies, not bundled.
 - ATAC distance is computed and reported but is not part of the ranking formula.
 - hg38 is the tested reference. Other genomes should work given a matching

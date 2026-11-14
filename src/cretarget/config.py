@@ -49,8 +49,8 @@ script = ""             # path to launch-dCas9.py
 ckpt_dir = ""           # optional: defaults to the cache dir used by `cretarget fetch-models`
 
 [seed_finder]
-dir = ""                # path to seed-finder-lite (the dir containing src/ and refs/)
-python_bin = ""         # optional: python with pyfaidx installed; defaults to the current interpreter
+promoter_fa = ""        # optional: overrides the reference built by `cretarget build-seed-reference`
+tss_table = ""          # optional: as above
 
 [cache]
 dir = ""                # optional: overrides CRETARGET_CACHE_DIR / ~/.cretarget

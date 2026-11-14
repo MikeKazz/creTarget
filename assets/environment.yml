@@ -30,13 +30,6 @@ dependencies:
   # on clusters where the compute nodes differ from the submit host. It is the
   # single largest thing in the environment (~174 MB, and it pulls X11 libs).
   - openjdk=17
-  # seed-finder-lite (--run_seed_finder) imports pyfaidx to read its promoter
-  # reference. It is a hard requirement of that step and was previously
-  # missing, so the step only worked when --seed_finder_python pointed at an
-  # interpreter outside this environment. The bundled reference is plain gzip,
-  # which seed-finder-lite decompresses itself, so biopython -- needed only for
-  # true BGZF input -- is not required.
-  - pyfaidx=0.8
   - pip
   - pip:
       # Installed from GitHub's release TARBALL, deliberately not `git+https`.
@@ -52,4 +45,4 @@ dependencies:
       # apart got different code; a tag tarball cannot change.
       #
       # Bump this URL whenever you cut a new tag.
-      - https://github.com/MikeKazz/creTarget/archive/refs/tags/v0.2.6.tar.gz
+      - https://github.com/MikeKazz/creTarget/archive/refs/tags/v0.3.0.tar.gz
