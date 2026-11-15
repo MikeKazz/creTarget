@@ -25,7 +25,8 @@ The consequence is that this step sees the whole guide table rather than one
 chunk, and that table can be tens of gigabytes. It is never loaded: the table
 is streamed twice, hits are streamed to disk as they are found, and the only
 thing held in memory is the seed index -- which is why `--seed_finder_max_guides`
-exists. Budget roughly 1 GB of RAM per million guides screened.
+exists. Measured at ~705 bytes per guide, so budget ~0.7 GB of RAM per million
+guides screened.
 """
 
 import argparse
@@ -55,7 +56,8 @@ REQUIRED_COLUMNS = ("spacer", "region_id", "genome_start", "genome_end")
 csv.field_size_limit(10 * 1024 * 1024)
 
 
-def build_guide_id(region_id, genome_start, genome_end, orientation, index):
+def build_guide_id(region_id, genome_start, genome_end, orientation, index,
+                   prefix=None):
     """A guide_id that is unique by construction.
 
     Region plus span plus orientation is almost unique but not quite -- two
@@ -63,8 +65,18 @@ def build_guide_id(region_id, genome_start, genome_end, orientation, index):
     appended rather than only on collision. That also lets the id be assigned
     while streaming, with no global de-duplication pass over a table that may
     not fit in memory.
+
+    `prefix` exists for sharded runs. The index is the row's position in the
+    file being read, so with the table split across tasks it restarts at 0 in
+    every shard: two genuinely duplicated guides in different shards would
+    then receive the SAME id, and the merged hit table could not say which
+    guide a hit belonged to. (The per-guide summary stays correct either way,
+    because each shard joins against its own slice -- only the hit table is
+    ambiguous.) Passing the shard's name disambiguates it. Unsharded runs
+    leave it unset so ids stay short.
     """
-    return f"{region_id}_{genome_start}_{genome_end}_{orientation}_{index}"
+    base = f"{region_id}_{genome_start}_{genome_end}_{orientation}_{index}"
+    return f"{prefix}_{base}" if prefix else base
 
 
 def _as_field(value):
@@ -147,7 +159,7 @@ def _is_screened(row, filter_index):
     return row[filter_index].strip().lower() in ("true", "1", "yes")
 
 
-def iter_guides(ranked_path, passing_only=True):
+def iter_guides(ranked_path, passing_only=True, id_prefix=None):
     """Stream (guide_id, spacer) for the guides to screen."""
     with open(ranked_path, newline="") as handle:
         reader = csv.reader(handle, delimiter="\t")
@@ -165,11 +177,12 @@ def iter_guides(ranked_path, passing_only=True):
                 row[idx["region_id"]], row[idx["genome_start"]],
                 row[idx["genome_end"]],
                 row[orientation_index] if orientation_index is not None else "NA",
-                index,
+                index, id_prefix,
             ), row[idx["spacer"]].strip().upper()
 
 
-def write_annotated(ranked_path, out_path, summary, passing_only=True):
+def write_annotated(ranked_path, out_path, summary, passing_only=True,
+                    id_prefix=None):
     """Second streaming pass: the table plus the four summary columns."""
     written = 0
     with open(ranked_path, newline="") as src, open(out_path, "w", newline="") as dst:
@@ -188,7 +201,7 @@ def write_annotated(ranked_path, out_path, summary, passing_only=True):
                 row[idx["region_id"]], row[idx["genome_start"]],
                 row[idx["genome_end"]],
                 row[orientation_index] if orientation_index is not None else "NA",
-                index,
+                index, id_prefix,
             )
             dst.write("\t".join(
                 row + summary.row_for(guide_id, _is_screened(row, filter_index))
@@ -199,9 +212,10 @@ def write_annotated(ranked_path, out_path, summary, passing_only=True):
 
 def scan_to_file(ranked_path, promoter_fa, tss_table, min_seed_length,
                  tss_window_bp, raw_hits_path, passing_only=True,
-                 progress_every=5000):
+                 progress_every=5000, id_prefix=None):
     """One pass over the reference; hits streamed to CSV, summary accumulated."""
-    guides = list(iter_guides(ranked_path, passing_only=passing_only))
+    guides = list(iter_guides(ranked_path, passing_only=passing_only,
+                              id_prefix=id_prefix))
     if not guides:
         raise SystemExit(
             f"ERROR: no guides to screen in {ranked_path}.\n"
@@ -270,10 +284,12 @@ def run(args):
 
     summary = scan_to_file(
         args.ranked, promoter_fa, tss_table, args.min_seed_length,
-        args.tss_window, raw_hits, passing_only=not args.all_guides)
+        args.tss_window, raw_hits, passing_only=not args.all_guides,
+        id_prefix=args.id_prefix)
 
     written = write_annotated(args.ranked, args.out, summary,
-                             passing_only=not args.all_guides)
+                             passing_only=not args.all_guides,
+                             id_prefix=args.id_prefix)
     print(f"Wrote {written:,} guides with seed-screening columns -> {args.out}",
           file=sys.stderr)
     print(f"Hit-level detail retained at {raw_hits}", file=sys.stderr)
@@ -297,6 +313,10 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--all-guides", dest="all_guides", action="store_true",
                         help="screen every guide, including those excluded by "
                              "the hard filters (default: only guides that pass)")
+    parser.add_argument("--id-prefix", dest="id_prefix", default=None,
+                        help="prepended to every guide_id. Set this when the "
+                             "table is one shard of a larger one, so ids stay "
+                             "unique across shards.")
     parser.add_argument("--outdir", default="seed_finder")
     parser.add_argument("--raw-hits", dest="raw_hits", default=None)
     parser.add_argument("--out", default="guides.final.tsv")

@@ -8,7 +8,7 @@
  *
  * `--seed_finder_max_guides` splits the table across several tasks. The limit
  * it exists for is memory, not time: the seed index is the only thing held in
- * RAM, at roughly 1 GB per million guides screened.
+ * RAM, measured at ~0.7 GB per million guides screened.
  */
 process SEED_FINDER {
     tag "${prefix}"
@@ -26,6 +26,13 @@ process SEED_FINDER {
     script:
     prefix = ranked.name.replaceAll(/\.(tsv|txt|csv)$/, '')
     def all_guides = params.seed_finder_all_guides ? '--all-guides' : ''
+    /*
+     * Only when sharding. The row index inside a guide_id is the row's
+     * position in the file being read, so across shards it restarts at 0 and
+     * two duplicated guides in different shards would collide in the merged
+     * hit table. Unsharded runs omit it so ids stay short.
+     */
+    def id_prefix = params.seed_finder_max_guides ? "--id-prefix ${prefix}" : ''
     """
     cretarget seed-finder \\
         --ranked ${ranked} \\
@@ -33,7 +40,7 @@ process SEED_FINDER {
         --tss-table ${tss_table} \\
         --min-seed-length ${params.seed_finder_min_length} \\
         --tss-window ${params.seed_finder_tss_window} \\
-        ${all_guides} \\
+        ${all_guides} ${id_prefix} \\
         --outdir seed_finder_work \\
         --raw-hits ${prefix}_raw_hits.csv \\
         --out ${prefix}.final.tsv

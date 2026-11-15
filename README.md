@@ -227,9 +227,12 @@ pass over the reference and barely moves with guide count — the per-position
 work is a dictionary lookup whether there are twenty guides or two million —
 so per-chunk invocation paid that fixed pass on every chunk. The table is
 streamed and hits are written as they are found; the only thing held in memory
-is the seed index, at roughly 1 GB per million guides screened.
+is the seed index, measured at **~0.7 GB per million guides** screened.
 `--seed_finder_max_guides N` splits the work into tasks of at most N guides
-when that becomes the constraint.
+when that becomes the constraint — so screening 68 million guides, which would
+need ~48 GB in one task, is comfortable at `--seed_finder_max_guides 4000000`
+(~3 GB per task). Each shard repeats the reference pass, so raise it until
+memory is the binding constraint rather than time.
 
 ## How it works
 
@@ -305,10 +308,10 @@ software.
 solve, no version skew between users:
 
 ```bash
-nextflow run MikeKazz/creTarget -r v0.3.0 -profile slurm,singularity ...
+nextflow run MikeKazz/creTarget -r v0.3.1 -profile slurm,singularity ...
 ```
 
-It defaults to `ghcr.io/mikekazz/cretarget:0.3.0`; override with
+It defaults to `ghcr.io/mikekazz/cretarget:0.3.1`; override with
 `--container_image`. The `conda` profile builds the same pinned environment
 from `assets/environment.yml` instead; if conda's solver is slow, use
 `-profile micromamba` (same environment, a solver that handles it in seconds). `--queue` and

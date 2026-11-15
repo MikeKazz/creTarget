@@ -107,6 +107,7 @@ GUIDE_B = "TTGACCATGGCATTCCAGGA"
 
 
 def ranked_table(tmp_path, rows, orientation=True, filters=True):
+    """(tmp_path is created if needed, so shard fixtures can use subdirs.)"""
     """A table shaped like guides.ranked.tsv.
 
     rows: (region_id, start, end, orientation, spacer, passes_hard_filters)
@@ -117,6 +118,7 @@ def ranked_table(tmp_path, rows, orientation=True, filters=True):
         header.remove("orientation")
     if not filters:
         header.remove("passes_hard_filters")
+    tmp_path.mkdir(parents=True, exist_ok=True)
     path = tmp_path / "guides.ranked.tsv"
     with open(path, "w", newline="") as handle:
         handle.write("\t".join(header) + "\n")
@@ -178,6 +180,31 @@ class TestIterGuides:
         ids = [guide_id for guide_id, _ in iter_guides(ranked)]
         assert ids == ["r1_1_20_FWD_1"]
 
+    def test_duplicate_guides_collide_across_shards_without_a_prefix(self, tmp_path):
+        """The row index is the position in the file being READ, so it
+        restarts in every shard. Two duplicated guides landing in different
+        shards would then share an id, making the merged hit table unable to
+        say which guide a hit belonged to."""
+        rows = [("r1", 100, 119, "FWD", GUIDE_A, "True")] * 8
+        shard_a = ranked_table(tmp_path / "a", rows[:4])
+        shard_b = ranked_table(tmp_path / "b", rows[4:])
+        ids = ([g for g, _ in iter_guides(shard_a)]
+               + [g for g, _ in iter_guides(shard_b)])
+        assert len(set(ids)) < len(ids), "fixture should demonstrate the clash"
+
+    def test_an_id_prefix_makes_shard_ids_unique(self, tmp_path):
+        rows = [("r1", 100, 119, "FWD", GUIDE_A, "True")] * 8
+        shard_a = ranked_table(tmp_path / "a", rows[:4])
+        shard_b = ranked_table(tmp_path / "b", rows[4:])
+        ids = ([g for g, _ in iter_guides(shard_a, id_prefix="shard1")]
+               + [g for g, _ in iter_guides(shard_b, id_prefix="shard2")])
+        assert len(set(ids)) == len(ids)
+        assert ids[0].startswith("shard1_")
+
+    def test_the_prefix_is_absent_by_default(self, tmp_path):
+        ranked = ranked_table(tmp_path, [("r1", 1, 20, "FWD", GUIDE_A, "True")])
+        assert list(iter_guides(ranked))[0][0] == "r1_1_20_FWD_0"
+
     def test_works_without_an_orientation_column(self, tmp_path):
         ranked = ranked_table(tmp_path, [("r1", 1, 20, "", GUIDE_A, "True")],
                               orientation=False)
@@ -231,6 +258,21 @@ class TestWriteAnnotated:
         counts = [r["seedfinder_hit_count"]
                   for r in csv.DictReader(open(out), delimiter="\t")]
         assert counts == ["1"] * 50
+
+    def test_the_prefix_is_used_consistently_by_both_passes(self, tmp_path):
+        """If only one pass applied the prefix, every count would read 0."""
+        ranked = ranked_table(tmp_path, [
+            ("r1", 1, 20, "FWD", GUIDE_A, "True"),
+            ("r2", 2, 21, "FWD", GUIDE_B, "True"),
+        ])
+        summary = HitSummary()
+        for guide_id, _ in iter_guides(ranked, id_prefix="s7"):
+            summary.add(guide_id, "GENEA", 5, 20)
+        out = tmp_path / "final.tsv"
+        write_annotated(ranked, out, summary, id_prefix="s7")
+        counts = [r["seedfinder_hit_count"]
+                  for r in csv.DictReader(open(out), delimiter="\t")]
+        assert counts == ["1", "1"]
 
     def test_original_columns_are_preserved(self, tmp_path):
         ranked = ranked_table(tmp_path, [("r1", 1, 20, "FWD", GUIDE_A, "True")])

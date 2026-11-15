@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1]
+
+### Fixed
+- **`guide_id` could repeat across shards in the merged hit table.** The row
+  index inside a `guide_id` is the row's position in the file being read, so
+  with `--seed_finder_max_guides` splitting the table it restarts at 0 in
+  every shard. Two genuinely duplicated guides landing in different shards
+  then received the same id, and the merged `*_raw_hits.csv` could not say
+  which guide a hit belonged to.
+
+  The per-guide summary was never affected -- each shard joins against its own
+  slice, and `guides.final.tsv` is byte-identical whether the run is sharded
+  or not, which is why the equivalence check did not catch this. Only the hit
+  table was ambiguous. Sharded runs now prefix each id with the shard's name;
+  unsharded runs are unchanged, so ids stay short in the common case.
+
+### Added
+- `cretarget seed-finder --id-prefix`, which is what the pipeline uses to
+  qualify shard ids.
+
+### Changed
+- Measured the seed index at ~705 bytes per guide, so shard sizing can be
+  chosen rather than guessed: roughly 0.7 GB per million guides screened. The
+  documentation previously said "about 1 GB", which was a conservative
+  estimate rather than a measurement.
+
 ## [0.3.0]
 
 Seed screening is now part of creTarget rather than a call out to a separately
