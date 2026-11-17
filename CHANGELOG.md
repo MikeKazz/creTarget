@@ -4,6 +4,172 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1]
+
+### Changed
+- **The default GENCODE release is now 47, was 44.** This changes the promoter
+  reference: a different annotation has a different TSS set, so windows shift
+  and some genes appear or disappear. Rebuild with
+  `cretarget build-seed-reference --fasta ... --force` to pick it up, and state
+  the release in any methods section -- it is recorded in `provenance.json`.
+
+  Note for anyone comparing against seed-finder-lite's bundled reference: that
+  file was built from release 44, which reproduced exactly (62,700 TSSs,
+  49,497 windows). A release-47 reference will differ from it.
+
+### Added
+- `cretarget build-seed-reference --gencode-release N` pins a specific release
+  without editing code, so a project can hold one annotation fixed across
+  rebuilds. A leading `v` is accepted. `--gtf` still overrides it entirely,
+  and in that case `provenance.json` records the file's path and SHA-256
+  rather than guessing a release.
+
+## [0.5.0]
+
+Two changes to the promoter-proximal seed screen, both raised in review by a
+third party. **Breaking:** `tss_distance` changes from unsigned to signed, the
+hit table gains three columns, and any existing seed reference must be rebuilt
+with `cretarget build-seed-reference --force`.
+
+### Fixed
+- **TSS strand was read from the GTF and then discarded**, so guide-to-TSS
+  distances could only be unsigned. Upstream and downstream of a TSS are not
+  equivalent for CRISPRi -- repression efficacy depends on which side dCas9
+  lands -- and Hartman et al. report their distance/repression relationship
+  against signed distance (their Fig. 3c). Because the strand was missing from
+  `tss_table.tsv`, this could not be corrected downstream; the information was
+  not in the reference files at all.
+  - `tss_table.tsv` gains a `strand` column.
+  - `tss_distance` is now **signed**: negative upstream, positive downstream,
+    relative to the gene's own strand. For a minus-strand gene the genomic
+    difference is negated, so the same site can be `-239` for one gene and
+    `+539` for its divergent neighbour.
+  - `tss_strand` is reported alongside, so the sign is interpretable without
+    re-deriving it.
+  - A three-column TSS table is now a **hard error** naming the rebuild
+    command, not a silent default to `+`. Defaulting would invert the sign for
+    every minus-strand gene while exiting 0, which is the same shape of
+    failure as the one-orientation seed index fixed in 0.3.0.
+  - `provenance.json` records `tss_table_has_strand`, so an old reference is
+    identifiable rather than merely broken.
+- **Only the single nearest TSS was reported.** Promoter windows are merged
+  across overlapping TSSs, so one window routinely spans several. At a
+  bidirectional promoter two genes sit on opposite strands a few hundred bp
+  apart -- roughly 10% of human genes -- and dCas9 loaded there can repress
+  either or both. Reporting only the marginally closer TSS meant the other gene
+  was never nominated, with nothing in the output to show it: every hit had a
+  gene and nothing errored. The loss was also biased rather than uniform, since
+  it fell on exactly the compact GC-rich promoters where seed matches
+  concentrate.
+  - New `tss_genes_in_window` and `tss_distances_in_window` columns list every
+    gene whose promoter the site falls in, nearest first, with matching signed
+    distances.
+  - `nearest_tss_gene` and `tss_distance` keep their meaning: the closest one.
+- `assets/verify_seed_run.sh` reported a spurious failure on any **unsharded**
+  run, because it checked for a shard prefix on `guide_id` that a single-task
+  run deliberately omits. Sharded runs were unaffected.
+
+### Changed
+- **Attribution corrected.** The seed-screening method is from Hartman et al.
+  2026, *Systematic identification of seed-driven off-target effects in
+  Perturb-seq experiments* (doi:10.64898/2026.03.27.714658);
+  seed-finder-lite, previously credited alone, is an implementation of that
+  method. The README, the `seed_scan` and `seed_finder` docstrings, the
+  `build-seed-reference` attribution banner and `CITATION.cff` now name the
+  original work, and `--run_seed_finder` asks users to cite it.
+- `assets/verify_seed_run.sh` checks that some hits nominate more than one
+  gene and that negative distances occur -- a never-multi-valued gene column
+  or an all-positive distance column is the signature of either defect above
+  regressing.
+- CI's synthetic annotation now contains a deliberate divergent TSS pair, and
+  CI asserts both genes are reported and that signed distances appear.
+
+### Note on existing results
+Seed-screening output from earlier releases has unsigned distances and names
+only the nearest gene per hit. Regenerating requires rebuilding the reference
+first (`--force`), since the old one has no strand column; the seed stage then
+re-runs with `-resume` reusing all upstream work.
+
+## [0.4.0]
+
+Adds two columns to each output table, so anything parsing them by position
+needs updating.
+
+### Added
+- **Self-hits are now identified.** A guide whose target region overlaps a
+  promoter window finds *itself* in the reference: a perfect full-length match
+  that is not an off-target at all. Because a large share of cCREs are
+  promoter-like, these dominated the output -- in a genome-wide run at
+  `--seed_finder_min_length 16`, **5,516,909 of 7,567,255 hits (72.9%) were
+  self-hits**, leaving 2,050,346 genuine off-target matches.
+
+  The giveaway was the `seed_length` distribution: a smooth 2-3x decay from 16
+  to 19, then a 64-fold *spike* at exactly 20. Longer perfect matches must be
+  rarer, so a spike at the full guide length is not homology.
+
+  - The hit table gains a `self_hit` column and keeps every hit, so nothing is
+    lost.
+  - `seedfinder_hit_count` now counts off-target hits only, and the
+    closest-gene columns are chosen from off-target hits only. A self-hit sits
+    ~0 bp from a TSS and would otherwise always win the "closest" slot, hiding
+    the nearest real one.
+  - `seedfinder_target_is_promoter` records the fact separately, which is
+    useful in itself: the region being targeted overlaps an annotated promoter.
+
+  Detection tests whether a hit falls inside the guide's own span rather than
+  matching an exact start. The guide's span covers protospacer plus PAM, and
+  the PAM is at the high coordinates for a forward guide and the low ones for a
+  reverse guide -- an exact-start test finds forward self-hits and misses every
+  reverse one, which is exactly half of them.
+- CI asserts that self-hits are marked, that each is a perfect 20/20 match, and
+  that `seedfinder_hit_count` sums to the number of non-self hits.
+
+### Changed
+- Seed-index memory is ~1 GB of RSS per million guides screened, up ~12% from
+  carrying each guide's locus. The previous figure of 0.7 GB came from
+  `tracemalloc`, which undercounts allocator and interpreter overhead; this one
+  is peak RSS, which is what a scheduler actually sees.
+
+### Note on existing results
+Seed-screening output from 0.3.x counts self-hits as off-target hits and needs
+regenerating for `seedfinder_hit_count` to mean off-target risk. The hits
+themselves were correct -- only their interpretation was. Re-running the seed
+stage with `-resume` reuses all upstream work.
+
+## [0.3.2]
+
+### Fixed
+- **`seed_finder/*_raw_hits.csv` was written with CRLF line endings.** Python's
+  `csv` module defaults to RFC 4180's CRLF, which is legal CSV but leaves a
+  trailing `\r` on the last field, so the `ucsc_url` column read as
+  `"...hgTracks?...\r"` to awk, cut, or anything else splitting on newlines.
+  Readers that go through a CSV parser were unaffected; readers reaching for
+  shell tools -- which is most people, on a table this size -- were not. The
+  writer now emits LF explicitly.
+
+  Hit tables written by 0.3.0 and 0.3.1 are affected. Nothing needs
+  regenerating: the per-guide summary in `guides.final.tsv` is computed
+  in-process and was never parsed back from the CSV, and that file was always
+  LF. To normalise an existing hit table in place:
+  `sed -i 's/\r$//' seed_finder/*_raw_hits.csv`
+
+### Changed
+- The run header and `--help` now say "seed screening" rather than
+  "seed-finder-lite", which stopped being accurate in 0.3.0 when the scanner
+  became part of creTarget. Attribution to seed-finder-lite stays where it
+  belongs -- in the README, the module docstring, and the reference builder.
+
+### Added
+- `assets/verify_seed_run.sh`: read-only post-run verification for a run that
+  included `--run_seed_finder`. Streams, so it is safe on a 50+ GB table.
+  Checks row-count agreement between the ranked and final tables, exactly one
+  header line in each, the four summary columns, that screened and
+  filtered-out guides are marked consistently, that `guide_id`s carry their
+  shard prefix, and -- the one that matters -- that hits appear on **both
+  strands**, since a one-sided strand column is the signature of a scanner
+  that indexes guides under a single orientation and silently misses half of
+  all true sites.
+
 ## [0.3.1]
 
 ### Fixed

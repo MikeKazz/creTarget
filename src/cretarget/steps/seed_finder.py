@@ -8,8 +8,9 @@ repression*, which is a different failure mode from the off-target *cutting*
 that FlashFry's scores describe.
 
 The scan itself lives in cretarget.seed_scan, which documents the method and
-credits seed-finder-lite, where the approach and the promoter-window reference
-design come from. This module is the plumbing: decide which guides to screen,
+credits its origin: Hartman et al. 2026 (doi:10.64898/2026.03.27.714658) for
+the method, and seed-finder-lite (doi:10.5281/zenodo.21599135) for the
+promoter-window reference design and the single-pass architecture. This module is the plumbing: decide which guides to screen,
 run one pass over the reference, write the hit table, and fold a per-guide
 summary back onto the ranked table.
 
@@ -25,7 +26,7 @@ The consequence is that this step sees the whole guide table rather than one
 chunk, and that table can be tens of gigabytes. It is never loaded: the table
 is streamed twice, hits are streamed to disk as they are found, and the only
 thing held in memory is the seed index -- which is why `--seed_finder_max_guides`
-exists. Measured at ~705 bytes per guide, so budget ~0.7 GB of RAM per million
+exists. Measured at ~1 KB of RSS per guide, so budget ~1 GB per million
 guides screened.
 """
 
@@ -41,15 +42,33 @@ SUMMARY_COLUMNS = [
     "seedfinder_closest_gene",
     "seedfinder_closest_tss_distance",
     "seedfinder_closest_seed_length",
+    # Whether the guide's OWN target overlaps a promoter window. Not an
+    # off-target signal -- but it is worth knowing, and keeping it separate is
+    # what lets hit_count mean off-target risk alone.
+    "seedfinder_target_is_promoter",
 ]
 
 HIT_COLUMNS = [
+    # self_hit first so it is impossible to miss when eyeballing the table.
+    "self_hit",
     "guide_id", "chr", "start", "end", "strand", "seed_length",
-    "nearest_tss_gene", "tss_distance", "pam", "pam_start", "pam_end",
+    # nearest_tss_gene / tss_distance describe the CLOSEST TSS; tss_distance is
+    # signed (negative upstream, positive downstream, relative to that gene's
+    # strand) to match the convention of Hartman et al.
+    "nearest_tss_gene", "tss_distance", "tss_strand",
+    # Every TSS within the window, nearest first. One site can sit in two
+    # promoters at once -- a bidirectional promoter puts two genes on opposite
+    # strands a few hundred bp apart -- and reporting only the closest would
+    # drop the other gene silently.
+    "tss_genes_in_window", "tss_distances_in_window",
+    "pam", "pam_start", "pam_end",
     "protospacer", "guide_sequence", "ucsc_url",
 ]
 
 REQUIRED_COLUMNS = ("spacer", "region_id", "genome_start", "genome_end")
+# Needed to recognise a self-hit. Absent, screening still works and every hit
+# is reported as a potential off-target.
+LOCUS_COLUMN = "chrom"
 
 # csv's default field limit is 128 KB. Nothing here should approach it, but a
 # malformed line should not abort a long run with an opaque error.
@@ -99,21 +118,37 @@ class HitSummary:
     def __init__(self):
         self._by_guide = {}
 
-    def add(self, guide_id, gene, tss_distance, seed_length):
+    def add(self, guide_id, gene, tss_distance, seed_length, self_hit=False):
+        """Record one hit.
+
+        A self-hit -- the guide matching its own target site, which happens
+        whenever the targeted region overlaps a promoter window -- is recorded
+        as a flag and deliberately NOT counted. It is a perfect full-length
+        match, so counting it would make every promoter-overlapping target
+        look like a maximal off-target risk. On a genome-wide cCRE library
+        these were 73% of all hits.
+        """
+        entry = self._by_guide.get(guide_id)
+        if entry is None:
+            entry = [0, None, "", "", "", False]
+            self._by_guide[guide_id] = entry
+
+        if self_hit:
+            entry[5] = True
+            return
+
         try:
+            # Chosen on magnitude, stored signed: "closest" means least
+            # distant either way, but the sign is what makes the value
+            # comparable with a published distance/repression curve.
             key = abs(int(tss_distance))
         except (TypeError, ValueError):
             key = None
-
-        entry = self._by_guide.get(guide_id)
-        if entry is None:
-            self._by_guide[guide_id] = [1, key, gene, tss_distance, seed_length]
-            return
         entry[0] += 1
         # Strictly-less keeps the first hit seen on a tie, which makes the
         # choice deterministic given the scan's deterministic order.
         if key is not None and (entry[1] is None or key < entry[1]):
-            entry[1:] = [key, gene, tss_distance, seed_length]
+            entry[1:5] = [key, gene, tss_distance, seed_length]
 
     def row_for(self, guide_id, screened=True):
         """The four summary values, in SUMMARY_COLUMNS order, always strings.
@@ -123,19 +158,28 @@ class HitSummary:
         did not look".
         """
         if not screened:
-            return ["", "", "", ""]
+            return ["", "", "", "", ""]
         entry = self._by_guide.get(guide_id)
         if entry is None:
-            return ["0", "", "", ""]
+            return ["0", "", "", "", "no"]
         return [str(entry[0]), _as_field(entry[2]), _as_field(entry[3]),
-                _as_field(entry[4])]
+                _as_field(entry[4]), "yes" if entry[5] else "no"]
 
     def __len__(self):
         return len(self._by_guide)
 
     @property
     def total_hits(self):
+        """Off-target hits only; self-hits are excluded by construction."""
         return sum(entry[0] for entry in self._by_guide.values())
+
+    @property
+    def guides_with_hits(self):
+        return sum(1 for entry in self._by_guide.values() if entry[0])
+
+    @property
+    def self_hits(self):
+        return sum(1 for entry in self._by_guide.values() if entry[5])
 
 
 def _header_indices(header, path):
@@ -160,7 +204,13 @@ def _is_screened(row, filter_index):
 
 
 def iter_guides(ranked_path, passing_only=True, id_prefix=None):
-    """Stream (guide_id, spacer) for the guides to screen."""
+    """Stream (guide_id, spacer, locus) for the guides to screen.
+
+    `locus` is (chrom, genome_start, genome_end) -- the guide's own target
+    site, which the scanner uses to recognise a self-hit. It is None when the
+    table has no `chrom` column, in which case every hit is reported as a
+    potential off-target.
+    """
     with open(ranked_path, newline="") as handle:
         reader = csv.reader(handle, delimiter="\t")
         header = next(reader)
@@ -170,15 +220,25 @@ def iter_guides(ranked_path, passing_only=True, id_prefix=None):
         filter_index = (header.index("passes_hard_filters")
                         if passing_only and "passes_hard_filters" in header
                         else None)
+        chrom_index = (header.index(LOCUS_COLUMN)
+                       if LOCUS_COLUMN in header else None)
         for index, row in enumerate(reader):
             if not _is_screened(row, filter_index):
                 continue
+            locus = None
+            if chrom_index is not None:
+                try:
+                    locus = (sys.intern(row[chrom_index]),
+                             int(row[idx["genome_start"]]),
+                             int(row[idx["genome_end"]]))
+                except (ValueError, IndexError):
+                    locus = None    # unparseable coordinates: screen anyway
             yield build_guide_id(
                 row[idx["region_id"]], row[idx["genome_start"]],
                 row[idx["genome_end"]],
                 row[orientation_index] if orientation_index is not None else "NA",
                 index, id_prefix,
-            ), row[idx["spacer"]].strip().upper()
+            ), row[idx["spacer"]].strip().upper(), locus
 
 
 def write_annotated(ranked_path, out_path, summary, passing_only=True,
@@ -252,21 +312,39 @@ def scan_to_file(ranked_path, promoter_fa, tss_table, min_seed_length,
 
     Path(raw_hits_path).parent.mkdir(parents=True, exist_ok=True)
     with open(raw_hits_path, "w", newline="") as handle:
+        # lineterminator is explicit because csv defaults to CRLF per RFC 4180.
+        # That is legal CSV, but it leaves a trailing \r on the last field for
+        # anyone reaching for awk or cut -- which is most people, on a table
+        # this size -- so the last column silently reads as "...url\r".
         writer = csv.DictWriter(handle, fieldnames=HIT_COLUMNS,
-                                extrasaction="ignore")
+                                extrasaction="ignore", lineterminator="\n")
         writer.writeheader()
+        written = self_written = 0
         try:
             for hit in hits:
                 hit["ucsc_url"] = seed_scan.ucsc_url(
                     hit["chr"], hit["start"], hit["end"])
                 writer.writerow(hit)
+                is_self = hit["self_hit"] == "yes"
+                self_written += is_self
+                written += 1
                 summary.add(hit["guide_id"], hit["nearest_tss_gene"],
-                            hit["tss_distance"], hit["seed_length"])
+                            hit["tss_distance"], hit["seed_length"],
+                            self_hit=is_self)
         except seed_scan.InvalidGuide as exc:
             raise SystemExit(f"ERROR: {exc}")
 
-    print(f"{summary.total_hits:,} hit(s) across {len(summary):,} of "
-          f"{len(guides):,} screened guides", file=sys.stderr)
+    print(f"{written:,} hit(s) written", file=sys.stderr)
+    if self_written:
+        print(f"  {self_written:,} ({100*self_written/written:.1f}%) are "
+              f"SELF-hits: the guide matching its own target site, because "
+              f"that target overlaps a promoter window. Recorded in the hit "
+              f"table and flagged by seedfinder_target_is_promoter, but "
+              f"excluded from seedfinder_hit_count -- they are not off-target "
+              f"risk.", file=sys.stderr)
+    print(f"  {summary.total_hits:,} off-target hit(s) across "
+          f"{summary.guides_with_hits:,} of {len(guides):,} screened guides",
+          file=sys.stderr)
     return summary
 
 

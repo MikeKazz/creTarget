@@ -85,7 +85,7 @@ def cmd_build_seed_reference(args):
     fasta = cfg.expand(args.fasta) or cfg.require_path(config, "reference", "fasta")
     fetch.build_seed_reference(
         fasta=fasta, gtf=cfg.expand(args.gtf) or None, dest=args.outdir,
-        force=args.force, config=config)
+        force=args.force, config=config, release=args.gencode_release)
 
 
 def cmd_coords_to_bed(args):
@@ -155,7 +155,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_score_launch_dcas9)
 
     p = sub.add_parser("seed-finder",
-                       help="add seed-finder-lite off-target/TSS columns")
+                       help="add promoter-proximal seed screening columns")
     seed_finder_step.add_arguments(p)
     p.set_defaults(func=cmd_seed_finder)
 
@@ -167,6 +167,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--gtf", default=None,
                    help=f"gene annotation GTF (default: download GENCODE "
                         f"release {fetch.GENCODE_RELEASE})")
+    p.add_argument("--gencode-release", dest="gencode_release", default=None,
+                   help=f"GENCODE release to download, e.g. 47 "
+                        f"(default: {fetch.GENCODE_RELEASE}). Ignored with --gtf.")
     p.add_argument("--outdir", default=None)
     p.add_argument("--force", action="store_true")
     p.set_defaults(func=cmd_build_seed_reference)

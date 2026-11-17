@@ -128,6 +128,9 @@ cretarget build-seed-reference --fasta "$DATA_DIR/cache/reference/hg38.fa"
 
 It writes a TSS table, a promoter-window FASTA and a `provenance.json`
 recording the annotation release into `$CRETARGET_CACHE_DIR/seed_reference`.
+The release is GENCODE 47 unless you pass `--gencode-release`; whichever you
+use, pin it for the life of a project, because a different release shifts the
+promoter windows.
 Takes a few minutes, and is reused by every run.
 
 Verify:

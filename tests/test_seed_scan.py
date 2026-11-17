@@ -215,27 +215,103 @@ class TestAmbiguousBases:
 class TestTssIndex:
     def test_nearest_matches_a_linear_scan(self):
         rng = random.Random(99)
-        rows = [("chr1", rng.randrange(1, 100_000), f"G{i}") for i in range(500)]
-        rows += [("chr2", rng.randrange(1, 100_000), f"H{i}") for i in range(500)]
+        rows = [("chr1", rng.randrange(1, 100_000), f"G{i}", "+") for i in range(500)]
+        rows += [("chr2", rng.randrange(1, 100_000), f"H{i}", "-") for i in range(500)]
         index = ss.TssIndex(rows)
         for _ in range(300):
             chrom = rng.choice(["chr1", "chr2"])
             position = rng.randrange(1, 100_000)
             _gene, distance = index.nearest(chrom, position)
-            expected = min(abs(position - t) for c, t, _ in rows if c == chrom)
-            assert distance == expected
+            expected = min(abs(position - t) for c, t, _, _ in rows if c == chrom)
+            assert abs(distance) == expected
 
     def test_unknown_chromosome_is_not_an_error(self):
-        index = ss.TssIndex([("chr1", 100, "A")])
+        index = ss.TssIndex([("chr1", 100, "A", "+")])
         assert index.nearest("chrZ", 100) == ("", None)
+        assert index.within("chrZ", 100, 1000) == []
 
     def test_reports_the_gene_name(self):
-        index = ss.TssIndex([("chr1", 100, "AAA"), ("chr1", 5000, "BBB")])
+        index = ss.TssIndex([("chr1", 100, "AAA", "+"), ("chr1", 5000, "BBB", "+")])
         assert index.nearest("chr1", 120) == ("AAA", 20)
-        assert index.nearest("chr1", 4000) == ("BBB", 1000)
+        assert index.nearest("chr1", 4000) == ("BBB", -1000)
 
     def test_counts_every_row(self):
-        assert len(ss.TssIndex([("chr1", 1, "A"), ("chr2", 2, "B")])) == 2
+        assert len(ss.TssIndex([("chr1", 1, "A", "+"), ("chr2", 2, "B", "-")])) == 2
+
+
+class TestSignedDistance:
+    """Hartman et al. report repression against SIGNED guide-to-TSS distance:
+    negative upstream, positive downstream, relative to the gene's strand.
+    An unsigned distance cannot be compared with that curve at all, and
+    getting the sign convention backwards for minus-strand genes would be
+    worse than leaving it unsigned."""
+
+    @pytest.mark.parametrize("strand,position,expected", [
+        # A + strand gene transcribes toward higher coordinates.
+        ("+", 1_200, 200),      # downstream
+        ("+", 800, -200),       # upstream
+        # A - strand gene transcribes toward LOWER coordinates, so the sign of
+        # the genomic difference flips.
+        ("-", 1_200, -200),     # upstream
+        ("-", 800, 200),        # downstream
+    ])
+    def test_sign_follows_the_gene_strand(self, strand, position, expected):
+        assert ss.TssIndex.signed_distance(position, 1_000, strand) == expected
+
+    def test_a_hit_on_the_tss_is_zero_either_way(self):
+        assert ss.TssIndex.signed_distance(1_000, 1_000, "+") == 0
+        assert ss.TssIndex.signed_distance(1_000, 1_000, "-") == 0
+
+    def test_within_reports_signed_values(self):
+        index = ss.TssIndex([("chr1", 1_000, "PLUS", "+"),
+                             ("chr1", 1_000, "MINUS", "-")])
+        by_gene = {g: d for g, d, _ in index.within("chr1", 1_200, 500)}
+        assert by_gene == {"PLUS": 200, "MINUS": -200}
+
+
+class TestBidirectionalPromoters:
+    """Two genes on opposite strands a few hundred bp apart -- roughly 10% of
+    human genes. dCas9 loaded between them can repress either, so reporting
+    only the marginally closer TSS drops the other silently. The loss is
+    biased, not uniform: it falls on exactly the compact GC-rich promoters
+    where seed matches concentrate."""
+
+    def index(self):
+        return ss.TssIndex([
+            ("chr1", 10_000, "GENE_FWD", "+"),
+            ("chr1", 10_300, "GENE_REV", "-"),
+        ])
+
+    def test_both_genes_are_returned(self):
+        nearby = self.index().within("chr1", 10_150, 1_000)
+        assert [g for g, _, _ in nearby] == ["GENE_FWD", "GENE_REV"]
+
+    def test_nearest_first(self):
+        nearby = self.index().within("chr1", 10_050, 1_000)
+        assert nearby[0][0] == "GENE_FWD"
+        nearby = self.index().within("chr1", 10_250, 1_000)
+        assert nearby[0][0] == "GENE_REV"
+
+    def test_the_two_genes_get_opposite_signs(self):
+        """Between a divergent pair, a site is downstream of one and
+        downstream of the other too -- both transcribe away from the midpoint,
+        so both distances are positive. This pins the convention."""
+        nearby = dict((g, d) for g, d, _ in self.index().within("chr1", 10_150, 1_000))
+        assert nearby["GENE_FWD"] == 150      # downstream of the + gene
+        assert nearby["GENE_REV"] == 150      # downstream of the - gene
+
+    def test_ties_are_deterministic(self):
+        index = ss.TssIndex([("chr1", 1_000, "BBB", "+"), ("chr1", 1_000, "AAA", "+")])
+        assert [g for g, _, _ in index.within("chr1", 1_000, 10)] == ["AAA", "BBB"]
+
+    def test_the_window_bounds_what_is_returned(self):
+        assert len(self.index().within("chr1", 10_150, 100)) == 0
+        assert len(self.index().within("chr1", 10_150, 160)) == 2
+
+    def test_only_one_gene_when_the_promoter_is_not_shared(self):
+        index = ss.TssIndex([("chr1", 10_000, "LONELY", "+"),
+                             ("chr1", 90_000, "FARAWAY", "+")])
+        assert [g for g, _, _ in index.within("chr1", 10_050, 1_000)] == ["LONELY"]
 
 
 class TestTssTable:
@@ -243,27 +319,45 @@ class TestTssTable:
         """Skipping line 1 unconditionally silently drops a gene from a
         headerless file."""
         with_header = tmp_path / "a.tsv"
-        with_header.write_text("chr\ttss\tgene_name\nchr1\t100\tAAA\nchr1\t200\tBBB\n")
+        with_header.write_text("chr\ttss\tgene_name\tstrand\n"
+                               "chr1\t100\tAAA\t+\nchr1\t200\tBBB\t-\n")
         without = tmp_path / "b.tsv"
-        without.write_text("chr1\t100\tAAA\nchr1\t200\tBBB\n")
+        without.write_text("chr1\t100\tAAA\t+\nchr1\t200\tBBB\t-\n")
         assert len(ss.load_tss_table(with_header)) == 2
         assert len(ss.load_tss_table(without)) == 2
 
     def test_reads_gzip(self, tmp_path):
         path = tmp_path / "t.tsv.gz"
         with gzip.open(path, "wt") as handle:
-            handle.write("chr\ttss\tgene_name\nchr1\t100\tAAA\n")
-        assert ss.load_tss_table(path) == [("chr1", 100, "AAA")]
+            handle.write("chr\ttss\tgene_name\tstrand\nchr1\t100\tAAA\t+\n")
+        assert ss.load_tss_table(path) == [("chr1", 100, "AAA", "+")]
 
     def test_blank_and_short_rows_are_skipped(self, tmp_path):
         path = tmp_path / "t.tsv"
-        path.write_text("chr1\t100\tAAA\n\nchr1\t200\n")
-        assert ss.load_tss_table(path) == [("chr1", 100, "AAA")]
+        path.write_text("chr1\t100\tAAA\t+\n\nchr1\t200\n")
+        assert ss.load_tss_table(path) == [("chr1", 100, "AAA", "+")]
 
     def test_missing_gene_name_becomes_a_placeholder(self, tmp_path):
         path = tmp_path / "t.tsv"
-        path.write_text("chr1\t100\t\n")
-        assert ss.load_tss_table(path) == [("chr1", 100, "?")]
+        path.write_text("chr1\t100\t\t+\n")
+        assert ss.load_tss_table(path) == [("chr1", 100, "?", "+")]
+
+    def test_a_three_column_table_is_a_hard_error(self, tmp_path):
+        """A reference built before 0.5.0. Defaulting to "+" would invert the
+        sign for every minus-strand gene while exiting 0 -- the same shape of
+        silent-wrong-output failure as the one-orientation seed index."""
+        path = tmp_path / "old.tsv"
+        path.write_text("chr\ttss\tgene_name\nchr1\t100\tAAA\n")
+        with pytest.raises(SystemExit) as excinfo:
+            ss.load_tss_table(path)
+        message = str(excinfo.value)
+        assert "build-seed-reference" in message and "--force" in message
+
+    def test_an_unrecognised_strand_value_is_an_error(self, tmp_path):
+        path = tmp_path / "odd.tsv"
+        path.write_text("chr1\t100\tAAA\t?\n")
+        with pytest.raises(SystemExit):
+            ss.load_tss_table(path)
 
 
 class TestWindowNames:
@@ -314,7 +408,7 @@ class TestIterHits:
         # The window name carries 1-based coordinates, so sequence[0] IS
         # position 10,000 and the protospacer starts len(left) bases later.
         site_start = 10_000 + len(left)
-        index = ss.TssIndex([("chr1", tss_position, "GENEA")])
+        index = ss.TssIndex([("chr1", tss_position, "GENEA", "+")])
         return path, index, site_start
 
     def test_annotates_the_nearest_tss(self, tmp_path):
@@ -325,6 +419,10 @@ class TestIterHits:
         assert hits[0]["nearest_tss_gene"] == "GENEA"
         assert hits[0]["chr"] == "chr1"
         assert hits[0]["start"] == site_start
+        # Signed, and the whole-window columns are populated.
+        assert hits[0]["tss_strand"] == "+"
+        assert hits[0]["tss_genes_in_window"] == "GENEA"
+        assert str(hits[0]["tss_distance"]) == hits[0]["tss_distances_in_window"]
 
     def test_drops_hits_beyond_the_tss_window(self, tmp_path):
         path, tss_index, _ = self._reference(tmp_path, 10_100)
@@ -337,7 +435,7 @@ class TestIterHits:
         sequence = self.GUIDE + "AGG"
         with gzip.open(path, "wt") as handle:
             handle.write(f">just_a_contig\n{sequence}\n")
-        tss_index = ss.TssIndex([("chr1", 1, "GENEA")])
+        tss_index = ss.TssIndex([("chr1", 1, "GENEA", "+")])
         assert list(ss.iter_hits(path, [("g", self.GUIDE)], tss_index, 8, 2000)) == []
 
     def test_reports_progress_per_window(self, tmp_path):
@@ -347,6 +445,28 @@ class TestIterHits:
         list(ss.iter_hits(path, [("g", self.GUIDE)], ss.TssIndex([]), 8, 2000,
                           on_window=seen.append))
         assert seen == [0, 1, 2, 3]
+
+
+class TestGencodeUrl:
+    """The GTF URL is built from a release number, so a typo there produces a
+    404 at download time rather than a clear error."""
+
+    def test_default_release_is_pinned(self):
+        from cretarget import fetch
+        assert fetch.GENCODE_RELEASE.isdigit()
+        url = fetch.gencode_gtf_url()
+        assert f"release_{fetch.GENCODE_RELEASE}/" in url
+        assert url.endswith(f"gencode.v{fetch.GENCODE_RELEASE}.annotation.gtf.gz")
+
+    def test_an_explicit_release_is_used(self):
+        from cretarget import fetch
+        url = fetch.gencode_gtf_url("44")
+        assert "release_44/gencode.v44.annotation.gtf.gz" in url
+
+    @pytest.mark.parametrize("given", ["47", "v47", "V47"])
+    def test_a_leading_v_is_tolerated(self, given):
+        from cretarget import fetch
+        assert fetch.gencode_gtf_url(given) == fetch.gencode_gtf_url("47")
 
 
 class TestUcscUrl:

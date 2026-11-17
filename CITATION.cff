@@ -12,7 +12,7 @@ type: software
 authors:
   - family-names: Kazemi
     given-names: Mehrdad
-version: 0.3.1
+version: 0.5.1
 # The CONCEPT doi, which always resolves to the latest release. Zenodo mints
 # two DOIs per release: this one for the software as a whole, and a
 # version-specific one below. Cite the concept DOI when readers should get the
@@ -36,6 +36,48 @@ keywords:
   - functional genomics
   - bioinformatics
 references:
+  - type: article
+    title: >-
+      Systematic identification of seed-driven off-target effects in Perturb-seq
+      experiments
+    authors:
+      - family-names: Hartman
+        given-names: Austin
+      - family-names: Blair
+        given-names: John D.
+      - family-names: Nguyen
+        given-names: Thao P.
+      - family-names: Dyson
+        given-names: Kyle
+      - family-names: Bradu
+        given-names: Alexandra
+      - family-names: Takacsi-Nagy
+        given-names: Oliver
+      - family-names: Santostefano
+        given-names: Katherine
+      - family-names: Boade
+        given-names: Theresa
+      - family-names: "Bolaños"
+        given-names: Matthew
+      - family-names: Zhu
+        given-names: Ronghui
+      - family-names: Dann
+        given-names: Emma
+      - family-names: Marson
+        given-names: Alexander
+      - family-names: Gitler
+        given-names: Aaron D.
+      - family-names: Satija
+        given-names: Rahul
+      - family-names: Satpathy
+        given-names: Ansuman T.
+      - family-names: Roth
+        given-names: Theodore L.
+    year: 2026
+    doi: 10.64898/2026.03.27.714658
+    notes: >-
+      Origin of the promoter-proximal seed-screening method implemented by
+      --run_seed_finder. Pipeline: https://github.com/AustinHartman/perturb_seed
   - type: software
     title: FlashFry
     authors:

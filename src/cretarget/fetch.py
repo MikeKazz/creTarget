@@ -335,15 +335,25 @@ def _safe_extract(tar: tarfile.TarFile, dest: Path) -> None:
 # would blanket most of it, and CRISPRi on mtDNA is not a meaningful screen.
 # --------------------------------------------------------------------------
 
-GENCODE_RELEASE = "44"
-GENCODE_GTF_URL = (
-    f"https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/"
-    f"release_{GENCODE_RELEASE}/gencode.v{GENCODE_RELEASE}.annotation.gtf.gz"
-)
+# The pinned default. Changing it changes the promoter reference -- a
+# different release has a different TSS set, so windows shift and some genes
+# appear or disappear. The release used is recorded in provenance.json, and
+# `--gencode-release` overrides it, so a specific annotation can be held
+# fixed for a project without editing code.
+GENCODE_RELEASE = "47"
+
+
+def gencode_gtf_url(release: str = None) -> str:
+    release = str(release or GENCODE_RELEASE).lstrip("vV")
+    return (f"https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/"
+            f"release_{release}/gencode.v{release}.annotation.gtf.gz")
 
 SEED_REFERENCE_ATTRIBUTION = """\
-The promoter-proximal seed screen, and the design of the promoter-window
-reference it scans, are from seed-finder-lite (Kazemi, M.;
+The promoter-proximal seed screen implements the method of Hartman et al. 2026,
+"Systematic identification of seed-driven off-target effects in Perturb-seq
+experiments" (doi:10.64898/2026.03.27.714658). Please cite it if you use
+--run_seed_finder. The promoter-window reference design and single-pass batch
+architecture are from seed-finder-lite (Kazemi, M.;
 doi:10.5281/zenodo.21599135). Gene annotations are GENCODE, which is
 distributed under its own terms -- see https://www.gencodegenes.org/.
 """
@@ -359,11 +369,17 @@ def seed_reference_dir(config: dict | None = None) -> Path:
 
 
 def _parse_gencode_tss(gtf_path: Path):
-    """(chrom, tss, gene_name) for every gene entry.
+    """(chrom, tss, gene_name, strand) for every gene entry.
 
     The TSS is the 5'-most base: the start for a + strand gene, the end for a
     - strand one. Getting that backwards would put every minus-strand gene's
     promoter at the wrong end of the gene.
+
+    The strand is RETAINED, not just used and dropped. Without it a
+    guide-to-TSS distance can only be unsigned, and upstream vs downstream of
+    a TSS is not a cosmetic distinction for CRISPRi -- repression efficacy
+    depends on which side dCas9 lands, and Hartman et al. report their
+    distance/repression relationship against signed distance.
     """
     rows = []
     opener = gzip.open if str(gtf_path).endswith(".gz") else open
@@ -385,7 +401,7 @@ def _parse_gencode_tss(gtf_path: Path):
                 if item.startswith("gene_name "):
                     gene_name = item.split(" ", 1)[1].strip().strip('"')
                     break
-            rows.append((chrom, tss, gene_name))
+            rows.append((chrom, tss, gene_name, strand))
     return rows
 
 
@@ -393,7 +409,7 @@ def _promoter_windows(tss_rows, chroms, half_width, pad):
     """Merged, padded promoter windows as (chrom, start_1based, end_1based)."""
     by_chrom: dict[str, list[tuple[int, int]]] = {}
     allowed = set(chroms)
-    for chrom, tss, _gene in tss_rows:
+    for chrom, tss, _gene, _strand in tss_rows:
         if chrom not in allowed:
             continue
         by_chrom.setdefault(chrom, []).append(
@@ -438,7 +454,8 @@ def _read_fai(fasta: Path) -> dict:
 
 def build_seed_reference(fasta: str, gtf: str | None = None,
                          dest: Path | None = None, force: bool = False,
-                         config: dict | None = None) -> Path:
+                         config: dict | None = None,
+                         release: str | None = None) -> Path:
     """Build the TSS table and promoter-window FASTA for seed screening."""
     from . import seed_scan
 
@@ -467,11 +484,12 @@ def build_seed_reference(fasta: str, gtf: str | None = None,
         if not gtf_path.is_file():
             raise SystemExit(f"ERROR: GTF not found: {gtf_path}")
     else:
-        gtf_path = reference_dir(config) / f"gencode.v{GENCODE_RELEASE}.annotation.gtf.gz"
-        gtf_source = GENCODE_GTF_URL
+        release = str(release or GENCODE_RELEASE).lstrip("vV")
+        gtf_source = gencode_gtf_url(release)
+        gtf_path = reference_dir(config) / f"gencode.v{release}.annotation.gtf.gz"
         if not gtf_path.exists():
-            _download(GENCODE_GTF_URL, gtf_path,
-                      f"GENCODE release {GENCODE_RELEASE} annotation (~50 MB)")
+            _download(gtf_source, gtf_path,
+                      f"GENCODE release {release} annotation (~50 MB)")
 
     print(f"Reading gene annotations from {gtf_path.name}", file=sys.stderr)
     tss_rows = _parse_gencode_tss(gtf_path)
@@ -482,9 +500,9 @@ def build_seed_reference(fasta: str, gtf: str | None = None,
         )
     tss_rows.sort(key=lambda r: (r[0], r[1]))
     with open(tss_path, "w") as handle:
-        handle.write("chr\ttss\tgene_name\n")
-        for chrom, tss, gene in tss_rows:
-            handle.write(f"{chrom}\t{tss}\t{gene}\n")
+        handle.write("chr\ttss\tgene_name\tstrand\n")
+        for chrom, tss, gene, strand in tss_rows:
+            handle.write(f"{chrom}\t{tss}\t{gene}\t{strand}\n")
     print(f"  {len(tss_rows):,} TSSs -> {tss_path.name}", file=sys.stderr)
 
     windows = _promoter_windows(
@@ -536,11 +554,17 @@ def build_seed_reference(fasta: str, gtf: str | None = None,
     bed_path.unlink()
 
     provenance = {
-        "gencode_release": None if gtf else GENCODE_RELEASE,
+        # None when a GTF was supplied directly: creTarget cannot know which
+        # release someone else's file came from, and guessing would be worse
+        # than recording the path and checksum below.
+        "gencode_release": None if gtf else str(release or GENCODE_RELEASE).lstrip("vV"),
         "gtf_source": gtf_source,
         "gtf_sha256": sha256_of(gtf_path),
         "genome_fasta": str(fasta),
         "tss_count": len(tss_rows),
+        # Lets a reference built before 0.5.0 be identified as missing strand
+        # rather than merely failing in a confusing way later.
+        "tss_table_has_strand": True,
         "promoter_window_count": len(windows),
         "promoter_half_width_bp": seed_scan.PROMOTER_HALF_WIDTH,
         "promoter_pad_bp": seed_scan.PROMOTER_PAD,

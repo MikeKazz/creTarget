@@ -225,6 +225,13 @@ jobs:
                           f'gene_id "ENSG{gid:08d}"; gene_name "GENE{gid}"; '
                           f'gene_type "protein_coding";\n'
                       )
+              # A deliberate bidirectional promoter: two genes whose TSSs sit
+              # 300 bp apart on opposite strands. A site between them belongs
+              # to both, which is what the annotation must report.
+              f.write('chr1\tCI\tgene\t10200\t13000\t.\t+\t.\t'
+                      'gene_id "ENSGFWD"; gene_name "BIDIR_FWD";\n')
+              f.write('chr1\tCI\tgene\t7500\t10500\t.\t-\t.\t'
+                      'gene_id "ENSGREV"; gene_name "BIDIR_REV";\n')
           EOF
           export CRETARGET_CACHE_DIR="$PWD/ci_cache"
           cretarget build-seed-reference --fasta ci_ref/mini.fa --gtf ci_genes.gtf
@@ -254,6 +261,9 @@ jobs:
           rows = list(csv.DictReader(open(hits_files[0])))
           print(f"{len(rows)} seed hits")
 
+          final = list(csv.DictReader(open("results_seed/guides.final.tsv"),
+                                      delimiter="\t"))
+
           problems = []
           if not rows:
               problems.append("the seed screen found no hits at all")
@@ -266,8 +276,6 @@ jobs:
                   f"this and misses ~half of all true sites."
               )
 
-          final = list(csv.DictReader(open("results_seed/guides.final.tsv"),
-                                      delimiter="\t"))
           ranked = list(csv.DictReader(open("results_seed/guides.ranked.tsv"),
                                        delimiter="\t"))
           if len(final) != len(ranked):
@@ -279,6 +287,73 @@ jobs:
                          "seedfinder_closest_seed_length"):
               if final and column not in final[0]:
                   problems.append(f"missing column {column} in guides.final.tsv")
+
+          # Self-hits: a guide whose target overlaps a promoter window finds
+          # itself, a perfect full-length match that is NOT an off-target. It
+          # must be marked in the hit table and excluded from the count, or
+          # every promoter-overlapping target looks maximally risky. In a
+          # genome-wide run these were 73% of all hits.
+          if rows:
+              if "self_hit" not in rows[0]:
+                  problems.append("hit table has no self_hit column")
+              else:
+                  flags = collections.Counter(r["self_hit"] for r in rows)
+                  print("self_hit:", dict(flags))
+                  if not set(flags) <= {"yes", "no"}:
+                      problems.append(f"self_hit has unexpected values: {dict(flags)}")
+                  # Every self-hit must be a perfect full-length match.
+                  for r in rows:
+                      if r["self_hit"] == "yes" and r["seed_length"] != "20":
+                          problems.append(
+                              f"self-hit with seed_length {r['seed_length']}, "
+                              f"expected 20 -- a guide matches its own site "
+                              f"perfectly or it is not its own site")
+                          break
+                  # The counted total must exclude them.
+                  off = sum(1 for r in rows if r["self_hit"] == "no")
+                  counted = sum(int(r["seedfinder_hit_count"]) for r in final
+                                if r["seedfinder_hit_count"] not in ("", None))
+                  if counted != off:
+                      problems.append(
+                          f"seedfinder_hit_count sums to {counted} but there are "
+                          f"{off} non-self hits -- self-hits are leaking into the count")
+                  if "seedfinder_target_is_promoter" not in final[0]:
+                      problems.append("missing seedfinder_target_is_promoter column")
+
+          # TSS annotation must report EVERY gene whose promoter the site sits
+          # in, not just the closest. Bidirectional promoters put two genes on
+          # opposite strands a few hundred bp apart; reporting only the nearer
+          # one drops the other silently, and the CI fixture contains a
+          # deliberate divergent pair so this cannot regress unnoticed.
+          if rows:
+              for column in ("tss_strand", "tss_genes_in_window",
+                             "tss_distances_in_window"):
+                  if column not in rows[0]:
+                      problems.append(f"hit table missing {column}")
+              if "tss_genes_in_window" in rows[0]:
+                  multi = [r for r in rows if ";" in r["tss_genes_in_window"]]
+                  print(f"hits in >1 promoter: {len(multi)} of {len(rows)}")
+                  if not multi:
+                      problems.append(
+                          "no hit nominates more than one gene -- the fixture has a "
+                          "divergent TSS pair, so the annotation has regressed to "
+                          "nearest-TSS-only")
+                  for r in rows:
+                      if (len(r["tss_genes_in_window"].split(";"))
+                              != len(r["tss_distances_in_window"].split(";"))):
+                          problems.append("gene/distance list lengths disagree")
+                          break
+              # Distances must be SIGNED. An all-positive column means the sign
+              # was lost, which makes them incomparable with the published
+              # distance/repression relationship.
+              if "tss_distance" in rows[0]:
+                  signs = {("-" if int(r["tss_distance"]) < 0 else "+")
+                           for r in rows if r["tss_distance"] not in ("", None)}
+                  print("tss_distance signs present:", sorted(signs))
+                  if "-" not in signs:
+                      problems.append(
+                          "no negative tss_distance -- distances should be signed, "
+                          "negative upstream of the TSS")
 
           # Guides excluded by the hard filters are not screened, and must be
           # blank rather than reported as a confident zero.

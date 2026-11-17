@@ -93,7 +93,7 @@ def validateParams() {
         // the user has to choose them consciously.
         if (params.seed_finder_min_length == null) {
             errors << "--run_seed_finder requires --seed_finder_min_length (no default; " +
-                      "see seed-finder-lite's documentation)."
+                      "see the README)."
         }
         if (params.seed_finder_tss_window == null) {
             errors << "--run_seed_finder requires --seed_finder_tss_window (no default)."
@@ -189,7 +189,7 @@ workflow {
      Reference        : ${params.fasta}
      Chunk size       : ${params.chunk_size} regions/task
      launch-dCas9     : ${params.run_launch_dcas9 ? 'enabled' : 'disabled'}
-     seed-finder-lite : ${params.run_seed_finder ? 'enabled' : 'disabled'}
+     seed screening   : ${params.run_seed_finder ? 'enabled' : 'disabled'}
      Executor         : ${workflow.profile}
      Output           : ${params.outdir}
     ================================================================

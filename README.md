@@ -12,7 +12,8 @@ Off-target and on-target scoring comes from
 enhancer/promoter efficacy scoring via
 [launch-dCas9](https://github.com/Wancen/launch-dCas9), optional ATAC-seq
 chromatin-accessibility annotation, and optional promoter-proximal seed
-screening for off-target repression (after
+screening for off-target repression (method from
+[Hartman et al. 2026](https://doi.org/10.64898/2026.03.27.714658), following
 [seed-finder-lite](https://doi.org/10.5281/zenodo.21599135)).
 
 Execution is handled by [Nextflow](https://nextflow.io), so the same command
@@ -184,10 +185,30 @@ promoter, the gene is repressed whether or not the rest of the guide matches.
 FlashFry's mismatch-based scores do not capture that, so the two screens are
 complementary and neither replaces the other.
 
-The approach, and the design of the promoter-window reference it scans, are
-from **seed-finder-lite** (Kazemi, M., DOI
-[10.5281/zenodo.21599135](https://doi.org/10.5281/zenodo.21599135)). The
-implementation here is creTarget's own.
+**Where this method comes from.** Promoter-proximal seed screening for
+off-target CRISPRi repression — matching a guide's PAM-proximal seed next to an
+NGG within a window of an annotated TSS, and precomputing those matches across
+the promoterome — is from **Hartman et al. 2026**, *Systematic identification
+of seed-driven off-target effects in Perturb-seq experiments*
+([doi:10.64898/2026.03.27.714658](https://doi.org/10.64898/2026.03.27.714658)).
+Their pipeline is at
+[AustinHartman/perturb_seed](https://github.com/AustinHartman/perturb_seed).
+
+**seed-finder-lite** (Kazemi, M.,
+[doi:10.5281/zenodo.21599135](https://doi.org/10.5281/zenodo.21599135)) is a
+command-line implementation of that method; the merged promoter-window
+reference design and the single-pass batch architecture used here come from it.
+The scanner in creTarget is creTarget's own code.
+
+If you use `--run_seed_finder`, please cite Hartman et al. alongside creTarget.
+
+Two parameter notes follow from their work. They define the seed as the 10–12
+PAM-proximal bases and search with a permissive threshold, while
+`--seed_finder_min_length` has no default here on purpose — see the discussion
+of what each value flags below. And `tss_distance` is **signed**, negative
+upstream and positive downstream relative to the gene's own strand, which is
+their convention (their Fig. 3c), so these distances can be compared with the
+published repression curve directly.
 
 Build the reference once — it needs `bedtools` and the hg38 FASTA you already
 have:
@@ -196,7 +217,9 @@ have:
 cretarget build-seed-reference --fasta /path/to/hg38.fa
 ```
 
-That downloads a pinned GENCODE annotation, derives a TSS table, and extracts
+That downloads a pinned GENCODE annotation (release 47 by default; use
+`--gencode-release` to pin another, or `--gtf` for your own file), derives a
+TSS table, and extracts
 ±2 kb windows around every TSS (merged where they overlap, padded by 23 bp so
 a site straddling a boundary is not truncated). The GENCODE release and the
 GTF's checksum are written to `provenance.json` beside the reference, so the
@@ -222,17 +245,40 @@ only ones going into a library. Excluded guides get blank seed columns rather
 than a count of zero, so "we looked and found nothing" stays distinguishable
 from "we did not look". `--seed_finder_all_guides` screens everything.
 
+**Self-hits are identified and excluded from the count.** Many cCREs are
+promoter-like, so a guide targeting one finds *itself* in the promoter
+reference — a perfect 20/20 match that is not an off-target at all. In a
+genome-wide cCRE run these were **73% of all hits**. They are kept in the hit
+table marked `self_hit=yes`, excluded from `seedfinder_hit_count`, and
+surfaced separately as `seedfinder_target_is_promoter`, which is useful in its
+own right: it tells you the region you are targeting overlaps an annotated
+promoter. Detection tests whether the hit falls inside the guide's own span
+rather than matching an exact start, because the PAM sits at the high
+coordinates for a forward guide and the low ones for a reverse guide.
+
 The step runs **once over the whole guide table**, not per chunk. Cost is one
 pass over the reference and barely moves with guide count — the per-position
 work is a dictionary lookup whether there are twenty guides or two million —
 so per-chunk invocation paid that fixed pass on every chunk. The table is
 streamed and hits are written as they are found; the only thing held in memory
-is the seed index, measured at **~0.7 GB per million guides** screened.
+is the seed index, measured at **~1 GB of RSS per million guides**
+screened.
 `--seed_finder_max_guides N` splits the work into tasks of at most N guides
 when that becomes the constraint — so screening 68 million guides, which would
-need ~48 GB in one task, is comfortable at `--seed_finder_max_guides 4000000`
-(~3 GB per task). Each shard repeats the reference pass, so raise it until
+need ~68 GB in one task, is comfortable at `--seed_finder_max_guides 4000000`
+(~4 GB per task). Each shard repeats the reference pass, so raise it until
 memory is the binding constraint rather than time.
+
+After a run, `assets/verify_seed_run.sh results/` checks the output:
+
+```bash
+bash assets/verify_seed_run.sh /path/to/results
+```
+
+It is read-only and streams, so it is safe on a 50+ GB table. Besides the
+table-shape invariants it checks that hits appear on **both strands** — a
+one-sided strand column is the signature of a scanner that indexes guides
+under a single orientation, which silently halves recall while exiting 0.
 
 ## How it works
 
@@ -308,10 +354,10 @@ software.
 solve, no version skew between users:
 
 ```bash
-nextflow run MikeKazz/creTarget -r v0.3.1 -profile slurm,singularity ...
+nextflow run MikeKazz/creTarget -r v0.5.1 -profile slurm,singularity ...
 ```
 
-It defaults to `ghcr.io/mikekazz/cretarget:0.3.1`; override with
+It defaults to `ghcr.io/mikekazz/cretarget:0.5.1`; override with
 `--container_image`. The `conda` profile builds the same pinned environment
 from `assets/environment.yml` instead; if conda's solver is slow, use
 `-profile micromamba` (same environment, a solver that handles it in seconds). `--queue` and

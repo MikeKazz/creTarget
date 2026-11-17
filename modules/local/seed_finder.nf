@@ -8,7 +8,7 @@
  *
  * `--seed_finder_max_guides` splits the table across several tasks. The limit
  * it exists for is memory, not time: the seed index is the only thing held in
- * RAM, measured at ~0.7 GB per million guides screened.
+ * RAM, measured at ~1 GB of RSS per million guides screened.
  */
 process SEED_FINDER {
     tag "${prefix}"
