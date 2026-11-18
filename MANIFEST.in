@@ -1,0 +1,31 @@
+include README.md
+include LICENSE
+include CHANGELOG.md
+include CITATION.cff
+include CONTRIBUTING.md
+include CODE_OF_CONDUCT.md
+include SECURITY.md
+include SUPPORT.md
+include AUTHORS.md
+include ROADMAP.md
+include main.nf
+include nextflow.config
+include mkdocs.yml
+
+recursive-include conf *.config
+recursive-include modules *.nf
+recursive-include workflows *.nf
+recursive-include assets *
+recursive-include docs *.md *.yml *.yaml *.txt *.svg
+recursive-include scripts *.sh *.py
+recursive-include test_data *
+recursive-include tests *.py
+recursive-include wiki *.md
+
+exclude .github/*
+exclude .pre-commit-config.yaml
+exclude .editorconfig
+exclude .gitattributes
+exclude .dockerignore
+exclude .zenodo.json
+global-exclude *.py[cod] __pycache__ .DS_Store

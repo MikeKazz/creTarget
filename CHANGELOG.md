@@ -4,6 +4,54 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Documentation site** built with MkDocs Material under `docs/`, covering
+  installation, a quick start, input and output formats, every pipeline
+  parameter, the step-level CLI, optional methods, cluster setup, provenance,
+  troubleshooting, and the release process. `mkdocs build --strict` runs in CI.
+- **GitHub wiki mirror** under `wiki/` with a `scripts/publish-wiki.sh` script
+  that supports a dry run, creates a backup branch before pushing, and prints
+  the command to undo a sync.
+- **Community files**: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`,
+  `SUPPORT.md`, `AUTHORS.md`, `ROADMAP.md`, issue forms, a pull request
+  template, `CODEOWNERS`, and Dependabot configuration.
+- **CI checks** for Ruff, ShellCheck, the strict documentation build, and
+  version-reference consistency. CodeQL analysis runs on pushes, pull requests,
+  and a weekly schedule.
+- **Release workflow** that validates the tag against every version pin and the
+  changelog, reruns CI, creates the GitHub Release, publishes to PyPI through
+  trusted publishing, and builds and pushes the container image with SBOM and
+  provenance.
+- `scripts/changelog_section.py` to extract a release's notes from
+  `CHANGELOG.md`, and a `Makefile` with the common development targets.
+- `pre-commit` hooks, `.editorconfig`, `.gitattributes`, `.zenodo.json`, and
+  `MANIFEST.in`.
+
+### Changed
+- **`README.md` is now a concise landing page** that points to the
+  documentation site for the full guides. The scientific content, attribution,
+  and measured performance table are preserved in `docs/`.
+- Packaging metadata now declares project URLs, the documentation and wiki
+  links, a supported Python range, and a conservative Ruff configuration.
+  `pyproject.toml` also declares the documentation dependencies.
+- `bump_version.sh` now works with both GNU and BSD `sed` (macOS), updates the
+  current-release examples in `docs/` and `wiki/`, and has a `--check` mode
+  that verifies every pin against a tag without changing files.
+- The README, installation guide, and FAQ no longer imply that
+  `pip install cretarget` or a Bioconda package already exists. Both currently
+  return not-found; the tagged source archive is documented as the honest
+  fallback until the release workflow publishes the first PyPI distribution.
+
+### Fixed
+- `docs/cluster-setup.md` used a nonexistent `cretarget setup-reference
+  --genome hg38` flag. The command takes no genome argument.
+- Removed two ShellCheck warnings in `assets/verify_seed_run.sh` and made the
+  intentional word splitting explicit.
+- Removed an unused import and three ambiguous single-letter names in the test
+  suite; import sorting is now enforced.
+
 ## [0.5.1]
 
 ### Fixed

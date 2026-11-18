@@ -104,8 +104,8 @@ class TestPrepRegions:
         assert "chr1:10000-10400" in str(row["linked_regions"])
 
     def test_fasta_headers_encode_coordinates(self, prepared):
-        headers = [l[1:].strip() for l in open(prepared / "regions.fasta")
-                   if l.startswith(">")]
+        headers = [line[1:].strip() for line in open(prepared / "regions.fasta")
+                   if line.startswith(">")]
         assert all("__" in h and ":" in h.split("__")[-1] for h in headers)
         assert len(headers) == 7
 

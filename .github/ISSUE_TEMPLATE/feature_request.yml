@@ -1,0 +1,72 @@
+name: Feature request
+description: Propose a new capability or a change to an existing one
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For changes to scoring, filters, seed definitions, or reference-building
+        logic, please describe the method and the evidence. creTarget is a
+        scientific tool; a feature that changes results needs a reason and a
+        regression test.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that creTarget makes difficult or impossible today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the interface and behavior you would like.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Existing workarounds, other tools, or simpler options.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Input parsing
+        - Region preparation
+        - FlashFry integration
+        - Ranking and filters
+        - launch-dCas9 scoring
+        - ATAC-seq annotation
+        - Seed screening
+        - Nextflow workflow and profiles
+        - Python packaging and CLI
+        - Documentation
+        - Other
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Effect on existing results
+      description: Would this change scores, ranks, output columns, or defaults? Attach evidence if it would.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and documentation.
+          required: true
+        - label: I understand that method changes require evidence and tests.
+          required: true

@@ -9,14 +9,20 @@ import pandas as pd
 import pytest
 
 from cretarget.steps.annotate import parse_contig
+from cretarget.steps.launch_dcas9 import unique_valid_spacers
 from cretarget.steps.prep_regions import (
-    compute_window, flag_linked_regions, make_names_unique, validate_contigs,
+    compute_window,
+    flag_linked_regions,
+    make_names_unique,
+    validate_contigs,
 )
 from cretarget.steps.rank import (
-    FILTER_ORDER, first_fail_reason, minmax_norm, parse_in_genome_count, seed_score,
+    FILTER_ORDER,
+    first_fail_reason,
+    minmax_norm,
+    parse_in_genome_count,
+    seed_score,
 )
-from cretarget.steps.launch_dcas9 import unique_valid_spacers
-
 
 # --------------------------------------------------------------------------
 # seed_score

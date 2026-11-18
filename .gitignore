@@ -7,8 +7,19 @@ dist/
 .venv/
 venv/
 .pytest_cache/
+.ruff_cache/
 .coverage
+coverage.xml
 htmlcov/
+
+# Documentation build
+site/
+
+# Editor and OS scratch
+.DS_Store
+.idea/
+.vscode/
+*.bak
 
 # Nextflow
 work/
@@ -34,3 +45,6 @@ FlashFry*.jar
 *.log
 logs/
 analysis/
+
+# Local-only curation notes (contains machine-specific paths)
+UNDO.md

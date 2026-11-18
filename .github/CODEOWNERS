@@ -1,0 +1,7 @@
+# Default owner for everything in the repository.
+* @MikeKazz
+
+# Documentation and release configuration.
+/docs/ @MikeKazz
+/wiki/ @MikeKazz
+/.github/ @MikeKazz

@@ -20,11 +20,10 @@ passes them explicitly.
 import argparse
 import sys
 
-from . import __version__
+from . import __version__, fetch
 from . import banner as banner_mod
 from . import config as cfg
 from . import doctor as doctor_mod
-from . import fetch
 from .steps import annotate as annotate_step
 from .steps import coords_to_bed as coords_to_bed_step
 from .steps import launch_dcas9 as launch_dcas9_step

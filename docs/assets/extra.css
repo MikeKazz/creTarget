@@ -1,0 +1,28 @@
+/* Small, deliberate adjustments. Keep the theme's typography and spacing. */
+
+.md-typeset .hero {
+  margin: 1.5rem 0 2rem;
+}
+
+.md-typeset .hero p:first-child {
+  font-size: 1.1rem;
+  color: var(--md-default-fg-color--light);
+  max-width: 46rem;
+}
+
+.md-typeset .grid.cards > ul > li {
+  border-radius: 0.4rem;
+}
+
+.md-typeset table:not([class]) {
+  font-size: 0.74rem;
+}
+
+.md-typeset code {
+  overflow-wrap: anywhere;
+}
+
+/* Make the version badge in the footer legible in both schemes. */
+.md-footer-meta__inner {
+  align-items: center;
+}

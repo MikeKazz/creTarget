@@ -24,7 +24,7 @@ def write_table(path, rows, header="target_enhancer", sep="\t"):
 
 
 def read_bed(path):
-    return [l.rstrip("\n").split("\t") for l in open(path) if l.strip()]
+    return [line.rstrip("\n").split("\t") for line in open(path) if line.strip()]
 
 
 class TestCoordsToBed:

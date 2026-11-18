@@ -124,6 +124,7 @@ echo
 
 # ----------------------------------------------------------- strand balance ----
 echo "-- Strand balance in the hit tables   <-- the regression check"
+# shellcheck disable=SC2046  # generated hit-table names contain no whitespace
 awk -F',' '
 FNR==1 {
     s = 0
@@ -158,6 +159,7 @@ echo
 # Bidirectional promoters are ~10% of human genes, so some hits must sit in
 # two promoters at once.
 echo "-- TSS annotation"
+# shellcheck disable=SC2046  # generated hit-table names contain no whitespace
 awk -F',' '
 FNR==1 {
     g = d = 0

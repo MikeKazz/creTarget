@@ -75,8 +75,9 @@ no dependency solve, no version skew between users. Add
 `assets/environment.yml` on first run. If conda's solver is slow, use
 `-profile micromamba` — same environment, seconds instead of an hour.
 
-**Manual.** `pip install cretarget`, plus `bedtools`, `samtools` and a JVM on
-`PATH`.
+**Manual.** `pip install cretarget` (or the tagged source install in
+[Installation](getting-started/installation.md) if it is not on PyPI yet), plus
+`bedtools`, `samtools` and a JVM on `PATH`.
 
 Do not add any of this to `~/.bashrc`. Put the exports in a small file you
 source per session — `assets/site_env.sh.example` is a template to copy and
@@ -90,32 +91,27 @@ From `$CODE_DIR/creTarget`:
 
 ```bash
 export CRETARGET_CACHE_DIR="$DATA_DIR/cache"
-cretarget setup-reference --genome hg38
+cretarget setup-reference
 ```
 
-That downloads the genome FASTA and the optional model checkpoints (~3.2 GB
-total) into `$CRETARGET_CACHE_DIR`. The environment variable takes precedence
-over anything in `config.toml`, so set it before running if your home
-directory is small.
+That downloads the genome FASTA and the prebuilt FlashFry index (~3.2 GB
+download; about 6.5 GB after the FASTA is decompressed) into
+`$CRETARGET_CACHE_DIR/reference`. The environment variable takes precedence
+over anything in `config.toml`, so set it before running if your home directory
+is small.
 
-FlashFry is a separate JVM tool with its own index, not fetched by
-`setup-reference`:
+FlashFry itself is a separate JVM tool and is not fetched by
+`setup-reference`; the downloaded index is built for release 1.15:
 
 ```bash
 mkdir -p "$DATA_DIR/tools" && cd "$DATA_DIR/tools"
 curl -LO https://github.com/mckennalab/FlashFry/releases/download/1.15/FlashFry-assembly-1.15.jar
-
-cd "$DATA_DIR/cache/reference"
-samtools faidx hg38.fa                 # if not already indexed
-java -Xmx32g -jar "$DATA_DIR/tools/FlashFry-assembly-1.15.jar" index \
-    --tmpLocation ./tmp \
-    --database hg38_standard_cas9ngg_db \
-    --reference hg38.fa \
-    --enzyme spcas9ngg
 ```
 
-Indexing takes roughly an hour and wants 32 GB. Do it once; it is reused by
-every run.
+You do not need to build an index for hg38: `setup-reference` already extracted
+`hg38_standard_cas9ngg_db` and its `.header`. See
+[Reference data](getting-started/reference-data.md) if you need an index for a
+different genome.
 
 If you plan to use `--run_seed_finder`, build its promoter reference once.
 This needs `bedtools` and the FASTA from above, and downloads a pinned GENCODE
@@ -147,7 +143,13 @@ cretarget doctor
 From `$CODE_DIR/creTarget`:
 
 ```bash
-nextflow run . -profile test,conda --outdir "$DATA_DIR/results_test"
+nextflow run . -profile test,conda \
+    --enhancer_bed test_data/test_regions.bed \
+    --snp_bed      test_data/test_snps.bed \
+    --fasta        "$DATA_DIR/cache/reference/hg38.fa" \
+    --flashfry_jar "$DATA_DIR/tools/FlashFry-assembly-1.15.jar" \
+    --flashfry_db  "$DATA_DIR/cache/reference/hg38_standard_cas9ngg_db" \
+    --outdir       "$DATA_DIR/results_test"
 ```
 
 The `test` profile uses a handful of regions and finishes in minutes. It is

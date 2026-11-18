@@ -1,0 +1,22 @@
+* text=auto eol=lf
+
+*.fa        text eol=lf
+*.fasta     text eol=lf
+*.fai       text eol=lf
+*.bed       text eol=lf
+*.tsv       text eol=lf
+*.csv       text eol=lf
+*.narrowPeak text eol=lf
+
+*.jar       binary
+*.pth       binary
+*.gz        binary
+*.tar.gz    binary
+*.png       binary
+*.jpg       binary
+*.ico       binary
+
+# Linguist: documentation and CI are a meaningful part of this repository,
+# but do not let generated or vendored data skew the language breakdown.
+docs/** linguist-documentation
+wiki/** linguist-documentation
