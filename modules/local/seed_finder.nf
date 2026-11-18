@@ -24,7 +24,15 @@ process SEED_FINDER {
     path "versions.yml", emit: versions
 
     script:
-    prefix = ranked.name.replaceAll(/\.(tsv|txt|csv)$/, '')
+    /*
+     * `stem` is a local; `prefix` is assigned WITHOUT def so the output block
+     * can see it. Interpolating `prefix` inside a `def` initializer below is
+     * what Nextflow 24.04 rejects ("Variable `prefix` already defined in the
+     * process scope"), so the local is what gets interpolated. Both names
+     * hold the same value.
+     */
+    def stem = ranked.name.replaceAll(/\.(tsv|txt|csv)$/, '')
+    prefix = stem
     def all_guides = params.seed_finder_all_guides ? '--all-guides' : ''
     /*
      * Only when sharding. The row index inside a guide_id is the row's
@@ -32,7 +40,7 @@ process SEED_FINDER {
      * two duplicated guides in different shards would collide in the merged
      * hit table. Unsharded runs omit it so ids stay short.
      */
-    def id_prefix = params.seed_finder_max_guides ? "--id-prefix ${prefix}" : ''
+    def id_prefix = params.seed_finder_max_guides ? "--id-prefix ${stem}" : ''
     """
     cretarget seed-finder \\
         --ranked ${ranked} \\

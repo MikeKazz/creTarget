@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.5.1]
 
+### Fixed
+- **The seed-screening module would not compile on Nextflow 24.04**, the
+  declared floor. `prefix` is assigned without `def` so the `output:` block
+  can see it, and 24.04's parser rejects interpolating it inside a later `def`
+  initializer: *"Variable `prefix` already defined in the process scope"*. A
+  separate local now carries the value into the interpolation. Found by CI,
+  which tests the floor; local development had only exercised Nextflow 26.
+  Verified by running the full pipeline with sharding on 24.04.4, 25.10.3 and
+  26.10.5.
+- Dropped `manifest.license`, which 24.04 rejects as an invalid attribute and
+  warns about twice on every run, burying real warnings in CI output. The
+  licence is still declared in `LICENSE`, `pyproject.toml` and `CITATION.cff`.
+
 ### Changed
 - **The default GENCODE release is now 47, was 44.** This changes the promoter
   reference: a different annotation has a different TSS set, so windows shift
