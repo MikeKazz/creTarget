@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://mikekazz.github.io/creTarget/
+    about: Installation, inputs, outputs, parameters, clusters, and troubleshooting.
+  - name: Wiki
+    url: https://github.com/MikeKazz/creTarget/wiki
+    about: Concise guides mirrored from the documentation.
+  - name: Security policy
+    url: https://github.com/MikeKazz/creTarget/blob/main/SECURITY.md
+    about: Report a vulnerability privately. Do not open a public issue.
+  - name: Citation
+    url: https://github.com/MikeKazz/creTarget/blob/main/CITATION.cff
+    about: How to cite creTarget and its dependencies.

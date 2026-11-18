@@ -1,0 +1,38 @@
+{
+  "title": "creTarget: CRISPRi guide RNA design for the noncoding genome",
+  "description": "<p>creTarget designs, scores, and ranks CRISPRi guide RNAs for noncoding target regions (SNPs and enhancers) in hg38. It combines FlashFry off-target and on-target scoring with optional CNN-based efficacy prediction, ATAC-seq accessibility annotation, and promoter-proximal seed screening, and scales from a handful of targets to genome-wide libraries through Nextflow.</p><p>The Python package is the step-level engine; the Nextflow pipeline is the supported end-to-end interface. Reference data and third-party model checkpoints are fetched explicitly and are not bundled.</p>",
+  "upload_type": "software",
+  "access_right": "open",
+  "license": "MIT",
+  "creators": [
+    {
+      "name": "Kazemi, Mehrdad",
+      "affiliation": ""
+    }
+  ],
+  "keywords": [
+    "CRISPRi",
+    "CRISPR",
+    "guide RNA design",
+    "noncoding genome",
+    "enhancers",
+    "functional genomics",
+    "bioinformatics",
+    "Nextflow",
+    "FlashFry"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/MikeKazz/creTarget",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    },
+    {
+      "identifier": "10.5281/zenodo.24148024",
+      "relation": "isVersionOf",
+      "scheme": "doi"
+    }
+  ],
+  "communities": [],
+  "notes": "creTarget builds on FlashFry, launch-dCas9, and the promoter-proximal seed-screening method of Hartman et al. 2026. See CITATION.cff for the full attribution."
+}

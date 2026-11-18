@@ -2,7 +2,6 @@
 contaminate stdout, appear in non-interactive logs, or raise.
 """
 import io
-import sys
 
 import pytest
 

@@ -15,9 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import __version__
+from . import __version__, fetch
 from . import config as cfg
-from . import fetch
 
 OK = "  OK      "
 WARN = "  WARN    "

@@ -1,0 +1,102 @@
+name: Bug report
+description: Report a reproducible problem with creTarget
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please search existing issues first.
+
+        **Do not use this form for security vulnerabilities.** See
+        [SECURITY.md](https://github.com/MikeKazz/creTarget/blob/main/SECURITY.md).
+
+        Redact local paths, usernames, and private data where needed.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong, in one or two sentences?
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: |
+        The exact command line, the profile, and the smallest input that
+        triggers the problem. If the input is private, describe its shape
+        (number of regions, format, contig naming) and say so.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: |
+        Paste the failing task log and the relevant part of
+        `results/pipeline_info/trace.txt`. If the pipeline failed at launch,
+        include `.nextflow.log`.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: cretarget-version
+    attributes:
+      label: creTarget version
+      description: Output of `cretarget --version` or the release tag.
+      placeholder: "creTarget X.Y.Z"
+    validations:
+      required: true
+
+  - type: input
+    id: nextflow-version
+    attributes:
+      label: Nextflow version
+      description: Output of `nextflow -version`.
+      placeholder: "25.10.3"
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Java version, scheduler (local/SLURM/PBS/SGE/LSF), and software profile (conda/container/host).
+      placeholder: "Rocky Linux 9, Java 17, SLURM, -profile slurm,singularity"
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`cretarget doctor` output"
+      description: Paste the full output, redacting paths if necessary.
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and documentation.
+          required: true
+        - label: I removed credentials and private data from this report.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

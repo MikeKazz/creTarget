@@ -1,0 +1,44 @@
+name: Question
+description: Ask for help using creTarget
+title: "[Question]: "
+labels: ["question", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [documentation](https://mikekazz.github.io/creTarget/), the
+        [FAQ](https://mikekazz.github.io/creTarget/guides/faq/), and existing
+        issues first.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What are you trying to do, and where are you stuck?
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: What you have tried
+      description: Commands, profiles, versions, and any error messages.
+      render: shell
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: creTarget version
+      placeholder: "creTarget X.Y.Z"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched the documentation and existing issues.
+          required: true

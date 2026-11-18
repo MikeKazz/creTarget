@@ -1,0 +1,35 @@
+# Local hooks. CI runs the same checks directly, so installing pre-commit is
+# optional for contributors but recommended.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^test_data/
+      - id: end-of-file-fixer
+        exclude: ^test_data/
+      - id: check-yaml
+        # mkdocs.yml uses !!python/name: tags that PyYAML's safe loader rejects.
+        exclude: ^mkdocs\.yml$
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=2048"]
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.5
+    hooks:
+      - id: ruff-check
+        args: ["--fix"]
+        types_or: [python, pyi]
+
+  - repo: local
+    hooks:
+      - id: version-sync
+        name: version references agree
+        entry: bash bump_version.sh --check
+        language: system
+        pass_filenames: false

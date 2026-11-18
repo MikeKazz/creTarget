@@ -1,0 +1,168 @@
+name: Release
+
+# A tag is the only trigger. The workflow validates that the tag, every
+# version pin, and the changelog agree before anything is published.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: validate the release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read the tag
+        id: version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "release version: ${version}"
+
+      - name: Check every version pin agrees with the tag
+        run: bash bump_version.sh --check "${{ steps.version.outputs.version }}"
+
+      - name: Require a non-empty changelog section
+        run: |
+          python scripts/changelog_section.py "${{ steps.version.outputs.version }}" \
+            --output release-notes.md
+          cat release-notes.md
+
+      - name: Build the distribution
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          twine check dist/*
+
+      - name: Assert model checkpoints are NOT bundled
+        # The launch-dCas9 weights are third-party. They are fetched from Zenodo
+        # at runtime and must never be redistributed in the package.
+        run: |
+          if unzip -l dist/*.whl | grep -q '\.pth'; then
+            echo "ERROR: a .pth checkpoint is bundled in the wheel"
+            unzip -l dist/*.whl | grep '\.pth'
+            exit 1
+          fi
+          if tar -tzf dist/*.tar.gz | grep -q '\.pth'; then
+            echo "ERROR: a .pth checkpoint is bundled in the sdist"
+            exit 1
+          fi
+          echo "OK: no checkpoints in the distribution"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-dist
+          path: dist/
+
+  ci:
+    name: CI
+    needs: validate
+    uses: ./.github/workflows/ci.yml
+
+  github-release:
+    name: create GitHub Release
+    needs: [validate, ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-dist
+          path: dist
+
+      - name: Extract the release notes
+        run: |
+          python scripts/changelog_section.py "${{ needs.validate.outputs.version }}" \
+            --output release-notes.md
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag \
+            --title "creTarget ${VERSION}" \
+            --notes-file release-notes.md
+
+  pypi:
+    name: publish to PyPI
+    needs: [validate, ci]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/cretarget
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-dist
+          path: dist
+
+      # Trusted publishing: no PyPI token is stored in GitHub. This requires a
+      # pending/trusted publisher configured on PyPI for:
+      #   owner MikeKazz, repository creTarget, workflow release.yml,
+      #   environment pypi.
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+
+  container:
+    name: publish the container image
+    needs: [validate, ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/mikekazz/cretarget
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true
