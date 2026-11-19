@@ -84,6 +84,15 @@ jobs:
           # Pinned, not inherited from the runner. See the header.
           platforms: linux/amd64
           push: true
+          # buildx attaches provenance/SBOM attestations by default, which
+          # turns a plain manifest into an OCI index carrying an extra
+          # "unknown/unknown" entry. Images through 0.5.1 were plain
+          # manifests, and attestation indexes are a known source of friction
+          # for Singularity/Apptainer -- which is the profile this project
+          # recommends as the portable one. Not worth the risk for metadata
+          # nobody here consumes.
+          provenance: false
+          sbom: false
           tags: |
             ghcr.io/mikekazz/cretarget:${{ steps.ref.outputs.version }}
             ghcr.io/mikekazz/cretarget:latest
@@ -104,6 +113,17 @@ jobs:
             echo "ERROR: published $ARCH; clusters need linux/amd64" >&2
             exit 1
           fi
+
+          # A single-platform manifest, as every release through 0.5.1 was.
+          # An index with an extra attestation entry is what buildx produces
+          # by default and is what Singularity can trip over.
+          MEDIA=$(docker buildx imagetools inspect "$IMAGE" --raw | head -c 400)
+          if echo "$MEDIA" | grep -q '"manifests"'; then
+            echo "ERROR: published a manifest index; expected a plain manifest" >&2
+            docker buildx imagetools inspect "$IMAGE" >&2
+            exit 1
+          fi
+          echo "OK: single linux/amd64 manifest"
 
           GOT=$(docker run --rm "$IMAGE" cretarget --version | tr -d '\r')
           echo "image reports: $GOT"
