@@ -61,15 +61,23 @@ optional `--run_launch_dcas9` step.
 
 ## Installation
 
-```bash
-pip install cretarget
-```
-
-Or with conda, which also brings `bedtools`, `samtools`, and a JRE:
+creTarget is not on PyPI or bioconda yet. Install it from a release tarball:
 
 ```bash
-conda install -c conda-forge -c bioconda cretarget
+pip install https://github.com/MikeKazz/creTarget/archive/refs/tags/v0.5.1.tar.gz
 ```
+
+Or build the full environment with conda, which also brings `bedtools`,
+`samtools`, and a JRE:
+
+```bash
+conda env create -f assets/environment.yml
+conda activate cretarget
+```
+
+If you only want to run the pipeline, you do not need to install anything
+beyond Nextflow and a container engine — `-profile singularity` (or `docker`,
+`apptainer`) pulls a prebuilt image.
 
 Check that everything is wired up:
 

@@ -5,10 +5,20 @@
 # configuration, conda layout, filesystem types and locking, GPU compute
 # capabilities, network reachability, and any reference data already on disk.
 #
-# SAFETY: strictly read-only outside its own report file. It does not install,
-# modify shell rc files, create conda environments, export anything into your
-# shell, or write anywhere except $REPORT. Every external command is guarded,
-# so a missing tool produces a "not found" line rather than aborting the run.
+# SAFETY: it does not install anything, modify shell rc files, create conda
+# environments, or export anything into your shell. Every external command is
+# guarded, so a missing tool produces a "not found" line rather than aborting.
+#
+# It is not, however, purely read-only. Precisely, it writes:
+#   * $REPORT, in the current directory;
+#   * a 1-byte lock probe in each surveyed directory, removed immediately;
+#   * with --with-io-test, a 256 MB file per surveyed directory to measure
+#     throughput, removed immediately (OFF by default: on a shared
+#     parallel filesystem that is real I/O your admins did not agree to,
+#     and it fails against a tight quota);
+#   * with --with-solve-test, conda's repodata cache, as a side effect of a
+#     `conda create --dry-run` solve (OFF by default: it also needs network,
+#     and fails where repo.anaconda.com is blocked under Anaconda's terms).
 #
 # Usage:
 #   bash inspect_cluster.sh                                  # report into $PWD
@@ -22,6 +32,22 @@
 # Then paste the report, or attach the file.
 
 set -uo pipefail   # deliberately NOT -e: a failed probe must not stop the survey
+
+# Opt-in probes. Both write more than a trivial amount, so neither runs
+# unless asked for. Parsed before the positional arguments so they can
+# appear anywhere on the command line.
+WITH_IO_TEST=0
+WITH_SOLVE_TEST=0
+ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --with-io-test)    WITH_IO_TEST=1 ;;
+        --with-solve-test) WITH_SOLVE_TEST=1 ;;
+        --all-tests)       WITH_IO_TEST=1; WITH_SOLVE_TEST=1 ;;
+        *)                 ARGS+=("$arg") ;;
+    esac
+done
+set -- "${ARGS[@]+"${ARGS[@]}"}"
 
 OUTDIR="${1:-$PWD}"
 REPORT="${OUTDIR}/cretarget_cluster_inspection_$(date +%Y%m%d_%H%M%S).txt"
@@ -197,10 +223,22 @@ if have conda; then
     fi
 
     sub "can conda solve against conda-forge/bioconda? (dry run, installs nothing)"
-    echo "  running: conda create --dry-run -n _cretarget_probe -c conda-forge -c bioconda bedtools samtools"
-    timeout 300 conda create --dry-run -n _cretarget_probe \
-        -c conda-forge -c bioconda bedtools samtools 2>&1 | tail -15
-    echo "  (--dry-run: no environment was created)"
+    if [ "$WITH_SOLVE_TEST" -eq 1 ]; then
+        echo "  running: conda create --dry-run -n _cretarget_probe -c conda-forge -c bioconda bedtools samtools"
+        # `timeout` is GNU coreutils and is not everywhere; run without it
+        # rather than losing the probe to "timeout: command not found".
+        if have timeout; then
+            timeout 300 conda create --dry-run -n _cretarget_probe \
+                -c conda-forge -c bioconda bedtools samtools 2>&1 | tail -15
+        else
+            conda create --dry-run -n _cretarget_probe \
+                -c conda-forge -c bioconda bedtools samtools 2>&1 | tail -15
+        fi
+        echo "  (--dry-run: no environment was created)"
+    else
+        echo "  [skipped -- pass --with-solve-test; it needs network and writes"
+        echo "   conda's repodata cache]"
+    fi
 else
     echo "[conda not on PATH -- check the module system section above]"
 fi
@@ -286,8 +324,38 @@ echo "SINGULARITY_CACHEDIR=${SINGULARITY_CACHEDIR:-<unset>}"
 echo "APPTAINER_CACHEDIR=${APPTAINER_CACHEDIR:-<unset>}"
 
 # =========================================================================
-section "9. SLURM"
+section "9. SCHEDULER"
 # =========================================================================
+# creTarget ships pbs, sge and lsf profiles as well as slurm. Probing only
+# SLURM meant a PBS or LSF site got a screen of "[not found: sinfo]" and no
+# information at all about the scheduler it actually runs.
+if ! have sinfo; then
+    if have qstat; then
+        echo "[no SLURM; PBS/Torque or SGE detected -- use -profile pbs or sge]"
+        sub "queues"
+        try qstat -Q
+        try qstat -q
+        sub "nodes"
+        try pbsnodes -a
+        sub "server configuration"
+        try qmgr -c 'print server'
+        sub "SGE queue configuration (if this is SGE)"
+        try qconf -sql
+    elif have bqueues; then
+        echo "[no SLURM; LSF detected -- use -profile lsf]"
+        sub "queues"
+        try bqueues -l
+        sub "hosts"
+        try lshosts
+        try bhosts
+    else
+        echo "[no SLURM, PBS, SGE or LSF client found on this host]"
+        echo "If this is a login node without the scheduler client installed,"
+        echo "re-run this script where you would normally submit jobs."
+        echo "With no scheduler at all, use -profile local."
+    fi
+fi
+
 sub "partitions (detail)"
 try sinfo -o "%20P %5a %10l %6D %6t %8z %10m %15G %N"
 sub "node detail"
@@ -408,14 +476,20 @@ for raw in "$CODE_DIR" "$DATA_DIR"; do
 done
 
 sub "sequential write throughput, 256 MB (writes then deletes one temp file)"
-for raw in "$DATA_DIR" "$CODE_DIR"; do
-    d="$(nearest_existing "$raw")"
-    if [ -d "$d" ] && [ -w "$d" ]; then
-        echo "  $d"
-        dd if=/dev/zero of="$d/.cretarget_dd.$$" bs=1M count=256 conv=fdatasync 2>&1 | tail -1
-        rm -f "$d/.cretarget_dd.$$"
-    fi
-done
+if [ "$WITH_IO_TEST" -eq 1 ]; then
+    for raw in "$DATA_DIR" "$CODE_DIR"; do
+        d="$(nearest_existing "$raw")"
+        if [ -d "$d" ] && [ -w "$d" ]; then
+            echo "  $d"
+            # conv=fdatasync is GNU dd; fall back to a plain write elsewhere.
+            dd if=/dev/zero of="$d/.cretarget_dd.$$" bs=1m count=256 conv=fdatasync 2>&1 | tail -1 \
+                || dd if=/dev/zero of="$d/.cretarget_dd.$$" bs=1048576 count=256 2>&1 | tail -1
+            rm -f "$d/.cretarget_dd.$$"
+        fi
+    done
+else
+    echo "  [skipped -- pass --with-io-test to write 256 MB per directory]"
+fi
 
 # =========================================================================
 section "12. NETWORK REACHABILITY FROM THIS HOST"
@@ -435,30 +509,30 @@ section "13. EXISTING PROJECT ASSETS (avoid re-downloading 3.2 GB)"
 # =========================================================================
 sub "any hg38 reference already on disk?"
 for base in "$CURRENT_HOME" "$CODE_DIR" "$DATA_DIR"; do
-    [ -d "$base" ] && find "$base" -maxdepth 4 \
+    [ -d "$base" ] && find "$base" -xdev -maxdepth 3 \
         \( -name 'hg38*.fa' -o -name 'hg38*.fa.gz' -o -name 'GRCh38*.fa' \) \
-        -printf '  %10s  %p\n' 2>/dev/null | head -10
+        -exec ls -lh {} + 2>/dev/null | awk '{print "  "$5"  "$NF}' | head -10
 done
-echo "  (empty result = nothing found within 4 levels)"
+echo "  (empty result = nothing found within 3 levels of these roots)"
 
 sub "any FlashFry jar or index already on disk?"
 for base in "$CURRENT_HOME" "$CODE_DIR" "$DATA_DIR"; do
-    [ -d "$base" ] && find "$base" -maxdepth 5 \
+    [ -d "$base" ] && find "$base" -xdev -maxdepth 4 \
         \( -iname 'FlashFry*.jar' -o -name '*cas9ngg_db*' \) \
-        -printf '  %10s  %p\n' 2>/dev/null | head -10
+        -exec ls -lh {} + 2>/dev/null | awk '{print "  "$5"  "$NF}' | head -10
 done
 
 sub "launch-dCas9 and seed-finder-lite"
 for base in "$CURRENT_HOME" "$CODE_DIR" "$DATA_DIR"; do
-    [ -d "$base" ] && find "$base" -maxdepth 5 \
+    [ -d "$base" ] && find "$base" -xdev -maxdepth 4 \
         \( -iname 'launch-dCas9*' -o -iname 'seed-finder*' -o -iname 'targetfinder' \) \
         -printf '  %p\n' 2>/dev/null | head -20
 done
 
 sub "existing model checkpoints (.pth)"
 for base in "$CURRENT_HOME" "$CODE_DIR" "$DATA_DIR"; do
-    [ -d "$base" ] && find "$base" -maxdepth 6 -name 'ckpt-seq-*.pth' \
-        -printf '  %10s  %p\n' 2>/dev/null | head -10
+    [ -d "$base" ] && find "$base" -xdev -maxdepth 4 -name 'ckpt-seq-*.pth' \
+        -exec ls -lh {} + 2>/dev/null | awk '{print "  "$5"  "$NF}' | head -10
 done
 
 sub "project directory contents right now"

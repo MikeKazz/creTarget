@@ -21,6 +21,11 @@ if [ -z "$RESULTS" ] || [ ! -d "$RESULTS" ]; then
     exit 2
 fi
 
+# %'d (thousands separator) is a GNU awk extension. /usr/bin/awk is mawk on
+# Debian-derived systems, including most container images, where the flag is
+# not supported. Prefer gawk when it exists and fall back to awk otherwise.
+AWK=$(command -v gawk 2>/dev/null || command -v awk)
+
 RANKED="${RESULTS}/guides.ranked.tsv"
 FINAL="${RESULTS}/guides.final.tsv"
 HITDIR="${RESULTS}/seed_finder"
@@ -44,9 +49,28 @@ for f in "$RANKED" "$FINAL"; do
         bad "$(basename "$f")" "missing"
     fi
 done
-shards=$(find "$HITDIR" -name '*_raw_hits.csv' 2>/dev/null | wc -l | tr -d ' ')
+# Collected ONCE into an array, and every later use is quoted. Each check
+# used to re-run this find unquoted and inline; with no hit tables the
+# expansion was empty, so awk got no file operands and fell back to reading
+# stdin -- the script hung forever, in exactly the situation it exists to
+# report on.
+HITS=()
+while IFS= read -r line; do HITS+=("$line"); done < <(
+    find "$HITDIR" -name '*_raw_hits.csv' 2>/dev/null | sort)
+shards=${#HITS[@]}
 note "seed shards" "$shards hit table(s)"
 [ "$shards" -gt 0 ] || bad "seed shards" "no hit tables found in $HITDIR"
+
+# Nothing downstream can run without the inputs. Stop here rather than
+# reporting nonsense (a missing file made the row count come out as -1).
+if [ "$fail" -ne 0 ]; then
+    echo
+    echo "=============================================================="
+    echo " Cannot continue: the run's output files are missing."
+    echo " Check that \$1 points at the --outdir of a --run_seed_finder run."
+    echo "=============================================================="
+    exit 1
+fi
 echo
 
 # ------------------------------------------------------------ row counts ----
@@ -87,7 +111,7 @@ echo
 # Guides excluded by the hard filters are not screened and must be BLANK, not
 # a confident 0. Mixing those up would overstate how much was checked.
 echo "-- Screening coverage"
-awk -F'\t' '
+"$AWK" -F'\t' '
 NR==1 {
     for (i = 1; i <= NF; i++) {
         if ($i == "seedfinder_hit_count")   c = i
@@ -124,7 +148,7 @@ echo
 
 # ----------------------------------------------------------- strand balance ----
 echo "-- Strand balance in the hit tables   <-- the regression check"
-awk -F',' '
+"$AWK" -F',' '
 FNR==1 {
     s = 0
     # Tolerate CRLF: releases before 0.3.2 wrote RFC 4180 line endings, so the
@@ -149,7 +173,7 @@ END {
         printf "  WARN +/- ratio is %.2f, which is more lopsided than expected\n", ratio
     else
         printf "  %-44s %.2f (balanced)\n", "+/- ratio", ratio
-}' $(find "$HITDIR" -name '*_raw_hits.csv' | sort) || fail=1
+}' "${HITS[@]}" || fail=1
 echo
 
 # ------------------------------------------------------- TSS annotation ----
@@ -158,7 +182,7 @@ echo
 # Bidirectional promoters are ~10% of human genes, so some hits must sit in
 # two promoters at once.
 echo "-- TSS annotation"
-awk -F',' '
+"$AWK" -F',' '
 FNR==1 {
     g = d = 0
     for (i = 1; i <= NF; i++) {
@@ -202,7 +226,7 @@ END {
         print "       SIGNED (negative upstream). An all-positive column"
         print "       suggests an unsigned value."
     }
-}' $(find "$HITDIR" -name '*_raw_hits.csv' | sort) || fail=1
+}' "${HITS[@]}" || fail=1
 echo
 
 # -------------------------------------------------------- guide_id scoping ----
@@ -218,9 +242,9 @@ if [ "$shards" -le 1 ]; then
     note "single shard" "ids need no prefix (ok)"
 else
     offenders=0
-    for f in $(find "$HITDIR" -name '*_raw_hits.csv' | sort); do
+    for f in "${HITS[@]}"; do
         expect=$(basename "$f" _raw_hits.csv)
-        wrong=$(awk -F',' -v want="$expect" '
+        wrong=$("$AWK" -F',' -v want="$expect" '
             FNR==1 { for (i=1;i<=NF;i++) { gsub(/\r$/, "", $i); if ($i=="guide_id") g=i }; next }
             g && index($g, want "_") != 1 { bad++ }
             END { print bad + 0 }' "$f")
@@ -240,7 +264,7 @@ echo "-- Provenance"
 for f in software_versions.yml run_manifest.json pipeline_info/trace.txt; do
     [ -r "${RESULTS}/${f}" ] && note "$f" "present" || note "$f" "absent"
 done
-SEEDREF="${CRETARGET_CACHE_DIR:-$HOME/.cretarget}/seed_reference/provenance.json"
+SEEDREF="${CRETARGET_CACHE_DIR:-${HOME:-/tmp}/.cretarget}/seed_reference/provenance.json"
 if [ -r "$SEEDREF" ]; then
     note "seed reference provenance" "$SEEDREF"
     grep -E '"(gencode_release|tss_count|promoter_window_count)"' "$SEEDREF" \

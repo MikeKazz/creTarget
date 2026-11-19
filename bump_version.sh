@@ -23,14 +23,20 @@ OLD=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)
 [ -n "$OLD" ] || { echo "ERROR: could not read current version from pyproject.toml" >&2; exit 1; }
 echo "bumping ${OLD} -> ${NEW}"
 
-sed -i "s/^version = \"${OLD}\"/version = \"${NEW}\"/"                     pyproject.toml
-sed -i "s/^__version__ = \"${OLD}\"/__version__ = \"${NEW}\"/"             src/cretarget/__init__.py
-sed -i "s/^version: ${OLD}\$/version: ${NEW}/"                             CITATION.cff
-sed -i "s|archive/refs/tags/v${OLD}\.tar\.gz|archive/refs/tags/v${NEW}.tar.gz|" assets/environment.yml
-sed -i "s|cretarget:${OLD}|cretarget:${NEW}|g"                             Dockerfile nextflow.config README.md
-sed -i "s|image\.version=\"${OLD}\"|image.version=\"${NEW}\"|"             Dockerfile
-sed -i "s|^    version         = '${OLD}'|    version         = '${NEW}'|" nextflow.config
-sed -i "s|-r v${OLD}|-r v${NEW}|g"              README.md assets/run_cretarget.sbatch
+# BSD/macOS sed requires an argument to -i; GNU sed must not have one. Without
+# this, running the script on a Mac silently creates backup files named after
+# the next argument and mangles the edit.
+if sed --version >/dev/null 2>&1; then SEDI=(sed -i); else SEDI=(sed -i ''); fi
+
+"${SEDI[@]}" "s/^version = \"${OLD}\"/version = \"${NEW}\"/"                     pyproject.toml
+"${SEDI[@]}" "s/^__version__ = \"${OLD}\"/__version__ = \"${NEW}\"/"             src/cretarget/__init__.py
+"${SEDI[@]}" "s/^version: ${OLD}\$/version: ${NEW}/"                             CITATION.cff
+"${SEDI[@]}" "s|archive/refs/tags/v${OLD}\.tar\.gz|archive/refs/tags/v${NEW}.tar.gz|" \
+    assets/environment.yml README.md docs/cluster-setup.md
+"${SEDI[@]}" "s|cretarget:${OLD}|cretarget:${NEW}|g"                             Dockerfile nextflow.config README.md
+"${SEDI[@]}" "s|image\.version=\"${OLD}\"|image.version=\"${NEW}\"|"             Dockerfile
+"${SEDI[@]}" "s|^    version         = '${OLD}'|    version         = '${NEW}'|" nextflow.config
+"${SEDI[@]}" "s|-r v${OLD}|-r v${NEW}|g"              README.md assets/run_cretarget.sbatch
 
 echo
 echo "=== verification ==="
@@ -47,6 +53,8 @@ check container_image     "$NEW" "$(sed -n "s|.*cretarget:\([0-9.]*\)'.*|\1|p" n
 check environment.yml     "$NEW" "$(sed -n 's|.*refs/tags/v\([0-9.]*\)\.tar\.gz|\1|p' assets/environment.yml)"
 check Dockerfile.label    "$NEW" "$(sed -n 's|.*image\.version="\([0-9.]*\)".*|\1|p' Dockerfile)"
 check sbatch.revision     "$NEW" "$(sed -n 's|.*-r v\([0-9.]*\) .*|\1|p' assets/run_cretarget.sbatch)"
+check readme.tarball      "$NEW" "$(sed -n 's|.*refs/tags/v\([0-9.]*\)\.tar\.gz.*|\1|p' README.md | head -1)"
+check docs.tarball        "$NEW" "$(sed -n 's|.*refs/tags/v\([0-9.]*\)\.tar\.gz.*|\1|p' docs/cluster-setup.md | head -1)"
 
 # Catch any reference the targeted seds above did not know about. A stale pin
 # in a template is worse than a stale comment: it silently runs the old code.

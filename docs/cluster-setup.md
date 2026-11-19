@@ -47,15 +47,41 @@ If the scheduler accounts for and enforces memory, and the nodes are not
 shared outside it, the generic `-profile slurm` is enough and you can skip
 step 5.
 
+Two things the generic profile does *not* supply:
+
+- **A partition**, if your site has no usable default. Pass `--queue <name>`.
+- **An allocation code**, if your site sets
+  `AccountingStorageEnforce=associations` — common on shared national and
+  university systems, where every job is charged to a project. Without it
+  every task is rejected with *"Invalid account or account/partition
+  combination specified"*. Check with
+  `sacctmgr show assoc where user=$USER` (section 9 of the survey report) and
+  pass it through a one-line config file:
+
+  ```bash
+  echo "process.clusterOptions = '--account=YOUR_ACCOUNT'" > site.config
+  nextflow run . -profile slurm -c site.config ...
+  ```
+
 ---
 
 ## 2. Install the software
 
 Nextflow needs Java 17 or newer. From anywhere:
 
+If your site provides software as environment modules, load them first — the
+names and versions differ at every site, so check `module avail java` (section
+2 of the survey report lists what it found):
+
+```bash
+module load java/17          # EXAMPLE ONLY — use your site's module names
+```
+
 ```bash
 java -version                      # must be >= 17
-curl -s https://get.nextflow.io | bash
+# -f so curl fails on an HTTP error instead of piping a proxy's
+# login page into bash.
+curl -fsSL https://get.nextflow.io | bash
 mkdir -p "$CODE_DIR/bin" && mv nextflow "$CODE_DIR/bin/"
 export PATH="$CODE_DIR/bin:$PATH"
 nextflow -version                  # must be >= 24.04.0
@@ -75,8 +101,15 @@ no dependency solve, no version skew between users. Add
 `assets/environment.yml` on first run. If conda's solver is slow, use
 `-profile micromamba` — same environment, seconds instead of an hour.
 
-**Manual.** `pip install cretarget`, plus `bedtools`, `samtools` and a JVM on
-`PATH`.
+**Manual.** creTarget is not published on PyPI; install it from a release
+tarball, plus `bedtools` (>= 2.27), `samtools` and a JVM on `PATH`:
+
+```bash
+pip install https://github.com/MikeKazz/creTarget/archive/refs/tags/v0.5.1.tar.gz
+```
+
+Whichever you pick, `cretarget doctor` checks that each tool is present *and
+actually runs*, and reports anything missing.
 
 Do not add any of this to `~/.bashrc`. Put the exports in a small file you
 source per session — `assets/site_env.sh.example` is a template to copy and
@@ -90,32 +123,44 @@ From `$CODE_DIR/creTarget`:
 
 ```bash
 export CRETARGET_CACHE_DIR="$DATA_DIR/cache"
-cretarget setup-reference --genome hg38
+cretarget setup-reference
 ```
 
-That downloads the genome FASTA and the optional model checkpoints (~3.2 GB
-total) into `$CRETARGET_CACHE_DIR`. The environment variable takes precedence
-over anything in `config.toml`, so set it before running if your home
-directory is small.
+That downloads the hg38 FASTA **and the prebuilt FlashFry off-target index**
+into `$CRETARGET_CACHE_DIR`, decompresses the FASTA and builds its `.fai`.
+The download is ~3.2 GB, but budget **~12 GB of free space** while it
+unpacks; the command checks before it starts and stops if there is not
+enough. `$CRETARGET_CACHE_DIR` takes precedence over `[cache].dir` in
+`config.toml`, so set it before running if your home directory is small or
+quota-bound.
 
-FlashFry is a separate JVM tool with its own index, not fetched by
-`setup-reference`:
+Model checkpoints are a separate, optional download, needed only for
+`--run_launch_dcas9`:
+
+```bash
+cretarget fetch-models
+```
+
+FlashFry itself — the JAR, not the index — is a separate JVM tool:
 
 ```bash
 mkdir -p "$DATA_DIR/tools" && cd "$DATA_DIR/tools"
-curl -LO https://github.com/mckennalab/FlashFry/releases/download/1.15/FlashFry-assembly-1.15.jar
-
-cd "$DATA_DIR/cache/reference"
-samtools faidx hg38.fa                 # if not already indexed
-java -Xmx32g -jar "$DATA_DIR/tools/FlashFry-assembly-1.15.jar" index \
-    --tmpLocation ./tmp \
-    --database hg38_standard_cas9ngg_db \
-    --reference hg38.fa \
-    --enzyme spcas9ngg
+curl -fsSLO https://github.com/mckennalab/FlashFry/releases/download/1.15/FlashFry-assembly-1.15.jar
 ```
 
-Indexing takes roughly an hour and wants 32 GB. Do it once; it is reused by
-every run.
+> **Building your own index.** You do not need this for hg38 —
+> `setup-reference` already provides it. For a different genome, build one
+> once. It wants ~32 GB and about an hour, so **submit it; do not run it on a
+> login node**, where it will be killed and may get your account flagged:
+>
+> ```bash
+> srun --mem=36G --cpus-per-task=2 --time=2:00:00 \
+>     java -Xmx32g -jar "$DATA_DIR/tools/FlashFry-assembly-1.15.jar" index \
+>         --tmpLocation ./tmp \
+>         --database mygenome_cas9ngg_db \
+>         --reference mygenome.fa \
+>         --enzyme spcas9ngg
+> ```
 
 If you plan to use `--run_seed_finder`, build its promoter reference once.
 This needs `bedtools` and the FASTA from above, and downloads a pinned GENCODE
@@ -147,13 +192,20 @@ cretarget doctor
 From `$CODE_DIR/creTarget`:
 
 ```bash
-nextflow run . -profile test,conda --outdir "$DATA_DIR/results_test"
+nextflow run . -profile test,conda \
+    --enhancer_bed test_data/test_regions.bed \
+    --fasta        "$DATA_DIR/cache/reference/hg38.fa" \
+    --flashfry_jar "$DATA_DIR/tools/FlashFry-assembly-1.15.jar" \
+    --flashfry_db  "$DATA_DIR/cache/reference/hg38_standard_cas9ngg_db" \
+    --outdir       "$DATA_DIR/results_test"
 ```
 
-The `test` profile uses a handful of regions and finishes in minutes. It is
-the fastest way to find a broken Java version, an unreadable index, or a work
-directory that does not support locking — before a long run finds them for
-you.
+The `test` profile only shrinks the resource requests and chunk size; it does
+not supply inputs, so the reference flags above are still required.
+
+It uses a handful of regions and finishes in minutes. It is the fastest way
+to find a broken Java version, an unreadable index, or a work directory that
+does not support locking — before a long run finds them for you.
 
 Then a real but small input of your own:
 
@@ -161,6 +213,7 @@ Then a real but small input of your own:
 head -200 /path/to/your/targets.bed > "$CODE_DIR/inputs/smoke.bed"
 
 nextflow run . -profile slurm,conda \
+    --queue        YOUR_PARTITION \
     --enhancer_bed "$CODE_DIR/inputs/smoke.bed" \
     --fasta        "$DATA_DIR/cache/reference/hg38.fa" \
     --flashfry_jar "$DATA_DIR/tools/FlashFry-assembly-1.15.jar" \

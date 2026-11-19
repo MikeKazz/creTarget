@@ -86,8 +86,24 @@ export CRETARGET_FLASHFRY_JAR="${CRETARGET_DATA_DIR}/tools/FlashFry-assembly-1.1
 # export CRETARGET_CKPT_DIR="${CRETARGET_CACHE_DIR}/models"
 # export CRETARGET_SEED_FINDER_DIR="/path/to/seed-finder-lite"
 
-mkdir -p "${CRETARGET_DATA_DIR}"/{cache,work,results} \
-         "${CRETARGET_CODE_DIR}"/{inputs,logs} 2>/dev/null
+# Refuse to "succeed" with the placeholders still in place. Unedited, the
+# mkdir below fails on /path, 2>/dev/null hides it, and the script then
+# prints "environment loaded" over a set of directories that do not exist --
+# which surfaces much later as an opaque Nextflow work-directory error.
+case "${CRETARGET_CODE_DIR}:${CRETARGET_DATA_DIR}" in
+    */path/to/*)
+        echo "ERROR: edit CRETARGET_CODE_DIR and CRETARGET_DATA_DIR in this" >&2
+        echo "       file before sourcing it." >&2
+        return 1 2>/dev/null || exit 1
+        ;;
+esac
+
+if ! mkdir -p "${CRETARGET_DATA_DIR}"/{cache,work,results} \
+              "${CRETARGET_CODE_DIR}"/{inputs,logs}; then
+    echo "ERROR: could not create the directories above -- check the paths" >&2
+    echo "       and that you have write access and quota." >&2
+    return 1 2>/dev/null || exit 1
+fi
 
 echo "creTarget environment loaded."
 echo "  code    : ${CRETARGET_CODE_DIR}"

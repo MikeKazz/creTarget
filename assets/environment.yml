@@ -10,15 +10,32 @@
 # 2. Solve time. Unpinned, conda's classic solver (still the default in conda
 #    <23.10 without conda-libmamba-solver) can take an hour or effectively
 #    hang on this dependency set. Pinned, the same solve takes seconds.
-#    If it is still slow for you, pass --conda_frontend micromamba.
+#    If it is still slow for you, use `-profile micromamba`. (There is no
+#    --conda_frontend parameter; the solver is chosen by profile, because a
+#    profile block that reads params.X cannot see a value passed on the
+#    command line. See conf/conda-base.config.)
 #
 # Channel order is conda-forge BEFORE bioconda, which is what bioconda itself
 # requires. A bioconda-first ~/.condarc with strict priority is a common cause
 # of broken htslib/samtools solves; declaring the order here avoids it.
+#
+# `nodefaults` keeps conda from appending the `defaults` channel out of the
+# user's ~/.condarc. Many institutions block repo.anaconda.com over Anaconda's
+# commercial-use terms, and the resulting failure is an opaque 403 rather than
+# anything that names the channel.
+#
+# PLATFORM: linux-64 is what this is tested on. bioconda's osx-arm64 coverage
+# is partial, so on an Apple Silicon Mac prefer `-profile docker`, or create
+# the environment with CONDA_SUBDIR=osx-64.
+#
+# NOTE: building this environment needs outbound HTTPS to the conda channels
+# AND to github.com (for the pip entry below). On clusters whose compute nodes
+# have no egress, build it once on a login node, or use a container profile.
 name: cretarget
 channels:
   - conda-forge
   - bioconda
+  - nodefaults
 dependencies:
   - python=3.12
   - pandas=2.2

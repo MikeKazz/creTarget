@@ -4,7 +4,14 @@
 #
 #   1. copy this file next to your inputs
 #   2. edit the CONFIGURE block below
-#   3. sbatch run_cretarget.sbatch
+#   3. mkdir -p logs          <-- REQUIRED before the first submission
+#   4. sbatch run_cretarget.sbatch
+#
+# `mkdir -p logs` is step 3 and not something this script can do for you:
+# slurmd opens the --output/--error files below when the job launches, long
+# before the first line of the script runs. If the directory is missing the
+# job dies at launch with no log to explain why. The paths are relative to
+# the directory you run `sbatch` FROM.
 #
 #SBATCH --job-name=cretarget
 #SBATCH --nodes=1
@@ -21,7 +28,12 @@
 #
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=4G
-#SBATCH --time=240:00:00
+#
+# ADJUST: must be <= your partition's MaxTime, or sbatch rejects the job
+# immediately with "Requested time limit is invalid". Check yours with:
+#     sinfo -o '%P %l'
+# The driver only waits on other jobs, so this needs to span the whole run.
+#SBATCH --time=48:00:00
 #
 # No --gres here. The driver needs no GPU; the LAUNCH_DCAS9 tasks request
 # their own through the site profile.
@@ -56,9 +68,33 @@ FLASHFRY_DB="${DATA_DIR}/cache/reference/hg38_standard_cas9ngg_db"
 # Your targets: BED, or one "chr:start-end" per line.
 TARGETS="${CODE_DIR}/inputs/targets.bed"
 
-# The site profile to run under. `singlenode` is the worked example in
-# conf/example-singlenode.config; `slurm` is the generic one.
-PROFILE="singlenode"
+# The site profile to run under.
+#
+# `slurm` is the generic one and the right default. Do NOT use `singlenode`
+# unless you have read conf/example-singlenode.config: it is a worked example
+# of one specific machine and hardcodes that site's partition ('gpu'), its
+# GPU request and its memory ceilings, none of which will match yours.
+#
+# Append a software profile if you are not using a host install, e.g.
+# "slurm,singularity" or "slurm,conda".
+PROFILE="slurm"
+
+# Partition/queue and allocation code. Leave empty if your site has a usable
+# default and does not require an account.
+#   sinfo -s                                  # partitions
+#   sacctmgr show assoc where user=$USER      # accounts
+QUEUE=""             # e.g. "compute"
+ACCOUNT=""           # e.g. "proj1234"
+
+# Which pipeline to run. A local clone works on compute nodes with no
+# outbound network; "MikeKazz/creTarget" makes Nextflow fetch it from GitHub
+# at runtime, which needs internet access from wherever this job lands.
+PIPELINE="${CODE_DIR}/creTarget"
+REVISION=""          # e.g. -r v0.5.1 -- only used when fetching remotely
+
+# If your site provides tools as environment modules, list them here. Names
+# and versions differ at every site -- check `module avail java nextflow`.
+SITE_MODULES=""      # e.g. "java/17.0.8 nextflow/24.10.0 singularity/3.11"
 
 # How creTarget is installed. Leave both empty if it is already on PATH.
 CONDA_SH=""          # e.g. /opt/miniconda3/etc/profile.d/conda.sh
@@ -79,6 +115,16 @@ export NXF_OPTS='-Xms500M -Xmx2G'
 
 mkdir -p "${CODE_DIR}/logs" "${DATA_DIR}"/{cache,work,results}
 cd "${CODE_DIR}"
+
+if [ -n "${SITE_MODULES}" ]; then
+    if command -v module >/dev/null 2>&1 || [ -n "${MODULESHOME:-}" ]; then
+        # Unquoted on purpose: SITE_MODULES is a list of module names.
+        # shellcheck disable=SC2086
+        module load ${SITE_MODULES}
+    else
+        echo "WARNING: SITE_MODULES is set but no 'module' command exists" >&2
+    fi
+fi
 
 # A batch job gets a NON-interactive shell, where `conda activate` fails
 # because the conda initialize block in ~/.bashrc never runs. Sourcing
@@ -106,9 +152,22 @@ command -v nextflow  >/dev/null || { echo "ERROR: nextflow not on PATH"  >&2; ex
 [ -r "$FLASHFRY_DB" ]          || { echo "ERROR: no FlashFry index at $FLASHFRY_DB" >&2; exit 1; }
 [ -r "${FLASHFRY_DB}.header" ] || { echo "ERROR: no index header at ${FLASHFRY_DB}.header" >&2; exit 1; }
 
-nextflow run MikeKazz/creTarget -r v0.5.1 \
+# Built as an array so an empty QUEUE/ACCOUNT contributes no argument at all
+# rather than an empty string the scheduler would reject.
+EXTRA_ARGS=()
+[ -n "${QUEUE}" ] && EXTRA_ARGS+=(--queue "${QUEUE}")
+if [ -n "${ACCOUNT}" ]; then
+    # A real file, not a process substitution: Nextflow may read a -c config
+    # more than once, and a fifo can only be read to the end once.
+    ACCOUNT_CONFIG="${CODE_DIR}/.cretarget_account.config"
+    printf "process.clusterOptions = '--account=%s'\n" "${ACCOUNT}" > "${ACCOUNT_CONFIG}"
+    EXTRA_ARGS+=(-c "${ACCOUNT_CONFIG}")
+fi
+# shellcheck disable=SC2086
+nextflow run "${PIPELINE}" ${REVISION} \
     -profile "${PROFILE}" \
     -resume \
+    "${EXTRA_ARGS[@]}" \
     --enhancer_bed "${TARGETS}" \
     --fasta        "${REF_FASTA}" \
     --flashfry_jar "${FLASHFRY_JAR}" \
