@@ -90,7 +90,7 @@ ACCOUNT=""           # e.g. "proj1234"
 # outbound network; "MikeKazz/creTarget" makes Nextflow fetch it from GitHub
 # at runtime, which needs internet access from wherever this job lands.
 PIPELINE="${CODE_DIR}/creTarget"
-REVISION=""          # e.g. -r v0.5.1 -- only used when fetching remotely
+REVISION=""          # e.g. -r v0.6.0 -- only used when fetching remotely
 
 # If your site provides tools as environment modules, list them here. Names
 # and versions differ at every site -- check `module avail java nextflow`.

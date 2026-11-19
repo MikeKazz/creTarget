@@ -4,6 +4,143 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0]
+
+A portability and correctness release. Nothing here changes the method; the
+changes make the software behave the same way on somebody else's cluster as
+it did on the one it was written on, and make missing data visible instead of
+silently scored.
+
+**If you use `-profile docker/singularity/apptainer`, pull the new image.**
+The container bakes the Python package in at build time, so running this
+version of the pipeline against `cretarget:0.5.1` would pair new workflow
+files with the old package and reintroduce the bugs below.
+
+### Fixed -- silent wrongness
+
+- **One malformed row disabled self-hit detection for an entire run.**
+  `parse_contig` returns `None` for an unparseable contig, which makes pandas
+  build the coordinate columns as `float64`; dropping the offending *row* does
+  not restore the *column* dtype. `genome_start` was then written as
+  `119869.0`, and the seed screen's `int()` parse failed into a handler that
+  silently set the locus to `None`. Self-hits were 73% of all hits in a
+  genome-wide run, so `seedfinder_hit_count` inflated roughly fourfold while
+  the run exited 0. Coordinates are now `int64`, region metadata uses nullable
+  `Int64` so an unmatched join cannot float them either, and the fallback
+  warns.
+- **`flag_linked_regions` missed nested regions.** It compared only adjacent
+  pairs in start order, so a region sitting inside a wider one was never
+  compared with it when a third region sorted between them. The bias was
+  systematic -- the wider the enhancer, the more neighbours it hid -- and a
+  falsely empty `linked_regions` is the damaging direction, since the column
+  warns that one guide may silence two targets. Replaced with an interval
+  sweep.
+- **Missing score components were scored as zero.** A `.fillna(0)` into a
+  fixed denominator scored "never measured" identically to "measured, and the
+  worst possible". launch-dCas9 deliberately returns `NaN` for spacers it
+  cannot encode, so those guides silently lost 30% of the scale and were
+  published with a confident mid-range number. Components are now excluded
+  from the denominator as well as the numerator.
+  - `composite_score_max_possible` now varies per row.
+  - New column **`composite_components_missing`**.
+  - Compare guides on `composite_score_normalized` when any component may be
+    missing.
+- **launch-dCas9 scores were attached to guides by row position.** Only a row
+  count defended the alignment, and a count says nothing about order.
+  launch-dCas9 already writes the input protospacer beside its score in a
+  `grna` column, so the correspondence was available and ignored; a build that
+  reordered its output would have attached every score to the wrong guide and
+  exited 0. Now joined on that column.
+- **Mixed-length spacers corrupted a whole launch-dCas9 batch.** Its
+  `preprocess_seq` applies the first sequence's length to the entire batch, so
+  a shorter one is zero-padded and a longer one truncated -- plausible numbers
+  either way. Spacers must now be exactly 20 bp; others are scored `NaN`.
+- **`is_self_hit` mixed coordinate conventions**, admitting one base outside
+  the guide's own span. A genuine off-target starting one base early was
+  reclassified as a self-hit and dropped from the count.
+- **A region past the end of its contig vanished silently.** Coordinates from
+  another assembly clamped to a 1 bp window and produced no guides, with no
+  message. Now dropped with a diagnosis.
+- Hard-filtered guides no longer carry a `composite_score`. One failing the
+  poly-T filter -- which will not transcribe at all -- was published at
+  `composite_score_normalized` 0.9989, above most guides that passed.
+- `composite_score_normalized` is clipped to 1.0; it printed
+  `1.0000000000000002` for 77 of 266 rows in a real run.
+- An unmatched metadata join now yields `<NA>` for `within_blast_radius`
+  rather than a confident `False`, and more than 1% unmatched is fatal.
+- An ATAC contig-naming mismatch (`chr1` vs `1`) is diagnosed instead of
+  silently producing an all-NaN column.
+- `write_annotated` reports rows it drops from `guides.final.tsv` instead of
+  dropping them silently, and writes through a `csv.writer` to match its
+  reader.
+
+`basesDiffToClosestHit = "UNK"` was reviewed and is **unchanged**: FlashFry's
+`ClosestHit.scala` emits it exactly when no off-target with >=1 mismatch
+exists, so treating it as maximally safe is correct. Any *other* unreadable
+value is now treated as missing rather than credited as safe.
+
+### Fixed -- portability
+
+- **`--queue` was accepted and then ignored on SLURM.** The profile mixed
+  `process.queue = ...` with a `process { }` block, and the block drops the
+  dotted assignments on Nextflow 24.04 and 25.10. Every task went to the
+  site's default partition, or was rejected where a partition is mandatory.
+- **Nextflow and Python disagreed about the cache location.** The workflow had
+  its own copy of the resolution order that ignored `[cache].dir` in
+  `config.toml` and used the JVM's `user.home`, which on Linux comes from the
+  passwd entry rather than `$HOME`. Both sides now resolve it through the new
+  `cretarget cache-dir`.
+- **Reading the config wrote to `$HOME`** on every task, which is an
+  unhandled `PermissionError` under `-profile docker` for any user whose uid
+  is not 1000, and crashed `cretarget doctor` before it could report anything.
+- **`doctor` reported OK for tools that cannot run.** It only checked `PATH`,
+  so a `java` shim with no JVM behind it passed and the run died later inside
+  FlashFry. Tools are now executed, with a `bedtools >= 2.27` floor.
+- **Downloads could hang forever** -- no timeout, on compute nodes behind a
+  DROPing firewall. Now time out, resume via HTTP Range, and catch the errors
+  raised during transfer rather than only those from `urlopen`.
+- `bgzip` was an undeclared dependency, absent from `environment.yml`, the
+  Dockerfile and `doctor`; replaced with the `gzip` module.
+- `setup-reference` checks free space first: it needs ~12 GB while unpacking,
+  not the 3.2 GB advertised.
+- narrowPeak parsing accepts BED6-width files and `.` summits.
+- launch-dCas9 scratch honours `$TMPDIR` and is cleaned up.
+
+### Added
+
+- **`cretarget cache-dir`** -- prints the resolved cache directory, and is how
+  the Nextflow side now finds the seed reference.
+- `CRETARGET_ZENODO_BASE` / `CRETARGET_GENCODE_BASE` redirect the two download
+  hosts to an institutional mirror or a pre-staged `file://` directory.
+- `XDG_CONFIG_HOME` is honoured for the config directory.
+- `assets/inspect_cluster.sh` detects PBS, SGE and LSF, not only SLURM, and
+  its disk-throughput and conda-solve probes are opt-in (`--with-io-test`,
+  `--with-solve-test`).
+- `assets/run_cretarget.sbatch` gains `QUEUE`, `ACCOUNT`, `SITE_MODULES` and a
+  local-clone option.
+
+### Changed
+
+- The sbatch template defaults to `-profile slurm`, not `singlenode` -- the
+  latter is a worked example of one specific machine and hardcodes that site's
+  partition and GPU request.
+- `cretarget --run_launch_dcas9` fails with an instruction when the
+  interpreter has no `torch`, instead of falling back to creTarget's own and
+  producing a `ModuleNotFoundError` from a subprocess.
+
+### Documentation
+
+- `docs/cluster-setup.md` could not be followed to the end on any machine:
+  `setup-reference --genome hg38` is not a real flag, the FlashFry index it
+  told you to spend an hour rebuilding is already downloaded, and the smoke
+  test omitted four required parameters.
+- `pip install cretarget` and `conda install ... cretarget` both fail --
+  neither package is published. Replaced with the release tarball.
+- The README claimed a chunked run is byte-identical to an unchunked one and
+  that CI verified it. Neither was true. What holds is that every guide's
+  `rank` and `composite_score` are identical regardless of chunk size, and CI
+  now checks exactly that.
+
 ## [0.5.1]
 
 ### Changed

@@ -105,7 +105,7 @@ no dependency solve, no version skew between users. Add
 tarball, plus `bedtools` (>= 2.27), `samtools` and a JVM on `PATH`:
 
 ```bash
-pip install https://github.com/MikeKazz/creTarget/archive/refs/tags/v0.5.1.tar.gz
+pip install https://github.com/MikeKazz/creTarget/archive/refs/tags/v0.6.0.tar.gz
 ```
 
 Whichever you pick, `cretarget doctor` checks that each tool is present *and
