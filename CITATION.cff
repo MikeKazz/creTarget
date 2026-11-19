@@ -26,8 +26,8 @@ identifiers:
     value: 10.5281/zenodo.24148024
     description: Concept DOI -- all versions of creTarget
   - type: doi
-    value: 10.5281/zenodo.24148025
-    description: DOI for creTarget v0.2.1 specifically
+    value: 10.5281/zenodo.24378489
+    description: DOI for creTarget v0.6.0 specifically
 keywords:
   - CRISPRi
   - guide RNA design
