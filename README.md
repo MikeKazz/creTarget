@@ -97,10 +97,20 @@ cretarget configure --set reference.flashfry_jar=/path/to/FlashFry-assembly-1.15
 cretarget configure --set reference.flashfry_db=~/.cretarget/reference/hg38_standard_cas9ngg_db
 ```
 
+`setup-reference` downloads ~3.2 GB but needs about **12 GB free** while it
+unpacks (both archives, plus the decompressed FASTA and the extracted index);
+it checks before starting and stops if there is not enough.
+
 > **Clusters without outbound network on compute nodes:** all downloads are
 > explicit, login-node commands that populate a cache directory. Pipeline steps
 > only read from that cache and never download. Point the cache somewhere
 > shared with `CRETARGET_CACHE_DIR=/shared/path/.cretarget`.
+>
+> Behind a proxy or an allow-list, `http_proxy`/`https_proxy` are honoured,
+> `SSL_CERT_FILE` covers TLS-inspecting proxies, and
+> `CRETARGET_ZENODO_BASE` / `CRETARGET_GENCODE_BASE` redirect the two
+> download hosts to an institutional mirror or a pre-staged `file://`
+> directory. Downloads time out rather than hanging, and resume on re-run.
 
 ## Usage
 
@@ -172,6 +182,17 @@ nextflow run MikeKazz/creTarget ... \
     --launch_python /path/to/conda/envs/launch-dCas9/bin/python \
     --ckpt_dir ~/.cretarget/models
 ```
+
+`--launch_python` must point at an interpreter that has `torch`; creTarget's
+own does not, and the step fails with that instruction rather than an opaque
+`ModuleNotFoundError` from a subprocess.
+
+Scores are matched back to guides on launch-dCas9's `grna` column, not by row
+position, so a build that reorders its output cannot silently attach scores
+to the wrong guides. Only spacers that are exactly 20 bp and ATGC-only are
+submitted; anything else is scored `NaN`, because launch-dCas9 applies the
+first sequence's length to the whole batch and would otherwise return
+plausible numbers for a zero-padded or truncated encoding.
 
 ### Optional: ATAC-seq annotation
 
@@ -319,11 +340,17 @@ one-off jobs, or for composing your own workflow:
 cretarget prep-regions --enhancer-bed enhancers.txt --fasta hg38.fa --outdir prep
 cretarget annotate --scored scored.tsv --region-metadata prep/regions.metadata.tsv --out annotated.tsv
 cretarget rank --annotated annotated.tsv --out ranked.tsv
-cretarget doctor
+cretarget doctor          # checks each tool is present AND actually runs
+cretarget cache-dir       # prints the resolved cache directory
 ```
 
-These read defaults from `~/.config/cretarget/config.toml`. Nextflow always
-passes parameters explicitly and ignores that file.
+These read defaults from `$CRETARGET_CONFIG_DIR`, else
+`$XDG_CONFIG_HOME/cretarget`, else `~/.config/cretarget/config.toml`. Reading
+never creates the file, so these are safe to run on a read-only or
+quota-bound home. Nextflow passes pipeline parameters explicitly and ignores
+that file — except for the cache location, which it resolves by calling
+`cretarget cache-dir`, so both sides always agree on where the seed reference
+was built.
 
 ## Repository layout
 
@@ -368,11 +395,23 @@ nextflow run MikeKazz/creTarget -r v0.5.1 -profile slurm,singularity ...
 It defaults to `ghcr.io/mikekazz/cretarget:0.5.1`; override with
 `--container_image`. The `conda` profile builds the same pinned environment
 from `assets/environment.yml` instead; if conda's solver is slow, use
-`-profile micromamba` (same environment, a solver that handles it in seconds). `--queue` and
-`--gpu_gres` cover the two things that vary most between sites. The container
-profiles additionally require `--container_image`; the pipeline refuses to
-start with a container engine enabled and no image, rather than silently
-running tasks against whatever tools happen to be on the host.
+`-profile micromamba` (same environment, a solver that handles it in seconds).
+
+`--queue` and `--gpu_gres` cover the two things that vary most between sites.
+If your cluster requires an allocation code — common where
+`AccountingStorageEnforce=associations` is set, and otherwise every task is
+rejected with *"Invalid account or account/partition combination"* — pass it
+through a small config file:
+
+```bash
+echo "process.clusterOptions = '--account=YOUR_ACCOUNT'" > site.config
+nextflow run MikeKazz/creTarget -profile slurm -c site.config --queue short ...
+```
+
+The container profiles use `--container_image` if you override it; the
+pipeline refuses to start with a container engine enabled and no image at
+all, rather than silently running tasks against whatever tools happen to be
+on the host.
 
 A **site profile** is only needed when your cluster has constraints the
 scheduler cannot express — notably when it does *not* account for memory when
@@ -386,9 +425,11 @@ and the reasoning is documented inline. Register your copy in the `profiles`
 block of `nextflow.config`, or keep it outside the repository and pass it with
 `-c /path/to/mysite.config`.
 
-`assets/inspect_cluster.sh` is a read-only survey script that reports
-everything a site profile needs — scheduler configuration, filesystem types
-and locking, GPU compute capabilities, and any reference data already on disk.
+`assets/inspect_cluster.sh` is a survey script that reports everything a site
+profile needs — scheduler configuration (SLURM, PBS, SGE or LSF), filesystem
+types and locking, GPU compute capabilities, and any reference data already
+on disk. It writes only its own report unless you opt into the throughput and
+conda-solve probes with `--with-io-test` / `--with-solve-test`.
 
 `docs/cluster-setup.md` walks through a first install on a new cluster.
 

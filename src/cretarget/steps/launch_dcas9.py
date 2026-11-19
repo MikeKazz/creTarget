@@ -30,21 +30,56 @@ from pathlib import Path
 import pandas as pd
 
 ATGC_RE = re.compile(r"^[ATGCatgc]+$")
+# The protospacer length launch-dCas9's checkpoints were trained on, and the
+# length of a SpCas9 spacer once the 3 bp NGG PAM is removed from FlashFry's
+# 23 bp target.
+SPACER_LENGTH = 20
 OUTCOMES = {
     "enhancerFitness": "launch_dCas9_enhancer",
     "promoterFitness": "launch_dCas9_promoter",
 }
 
 
-def unique_valid_spacers(spacers):
-    """Unique ATGC-only spacers. Anything else can't be one-hot encoded by
-    launch-dCas9 and would crash it, so those rows get NaN instead."""
+def unique_valid_spacers(spacers, expected_length=SPACER_LENGTH):
+    """Unique ATGC-only spacers, all of the same length.
+
+    Two separate requirements, both enforced here because launch-dCas9
+    enforces neither safely:
+
+    * ATGC only. Its one-hot encoder exits on anything else, so these rows
+      get NaN instead.
+    * A UNIFORM length. Its preprocess_seq() takes the length of the FIRST
+      sequence and applies it to the whole batch (util.py: `length =
+      len(data[0])`). A shorter sequence later in the batch raises IndexError
+      inside a bare `except` that only prints, leaving that row's encoding
+      zero-padded; a longer one is silently truncated. Either way the score
+      comes back plausible and wrong rather than failing. Worse, if the
+      SHORT one happens to sort first, every other spacer in the batch is
+      truncated to match it.
+    """
     unique = pd.Series(spacers).dropna().unique()
-    valid = [s for s in unique if ATGC_RE.match(str(s))]
-    n_invalid = len(unique) - len(valid)
-    if n_invalid:
-        print(f"WARNING: {n_invalid} unique spacer(s) contain non-ATGC characters; "
+
+    valid, non_atgc, wrong_length = [], 0, []
+    for spacer in unique:
+        text = str(spacer)
+        if not ATGC_RE.match(text):
+            non_atgc += 1
+        elif len(text) != expected_length:
+            wrong_length.append(text)
+        else:
+            valid.append(text)
+
+    if non_atgc:
+        print(f"WARNING: {non_atgc} unique spacer(s) contain non-ATGC characters; "
               f"they will get NaN scores", file=sys.stderr)
+    if wrong_length:
+        example = ", ".join(f"{s} ({len(s)} bp)" for s in wrong_length[:3])
+        print(f"WARNING: {len(wrong_length)} unique spacer(s) are not "
+              f"{expected_length} bp and will get NaN scores: {example}"
+              f"{' ...' if len(wrong_length) > 3 else ''}\n"
+              f"         launch-dCas9 assumes one length for the whole batch, "
+              f"so mixing lengths silently corrupts every score in it.",
+              file=sys.stderr)
     return valid
 
 
@@ -91,7 +126,61 @@ def score_outcome(spacers, outcome, launch_script, ckpt_dir, python_bin, workdir
             f"ERROR: row count mismatch for {outcome}: {len(spacers)} spacers in, "
             f"{len(preds)} predictions out. Refusing to guess at the alignment."
         )
-    return dict(zip(spacers, preds["predict"].to_numpy()))
+
+    return _join_predictions(preds, spacers, pred_csv, outcome)
+
+
+def _join_predictions(preds, spacers, pred_csv, outcome):
+    """Attach each prediction to its spacer BY KEY, not by row position.
+
+    launch-dCas9 writes the input protospacer alongside its score in a
+    `grna` column (runCNN.py: columns=['grna', 'predict']), so the exact
+    correspondence is available and there is no reason to infer it.
+
+    Position was the only thing tying a score to a guide before. The row
+    count matching says nothing about the ORDER, so a launch-dCas9 revision
+    that sorted or regrouped its output would have silently attached every
+    score to the wrong spacer -- the pipeline would exit 0 and the ranking
+    would be wrong. `--launch-script` points at a user-supplied clone of an
+    external project, so that revision is not under creTarget's control.
+    """
+    key_column = next((c for c in ("grna", "protospacer") if c in preds.columns), None)
+    if key_column is None:
+        print(f"WARNING: {pred_csv.name} has no 'grna'/'protospacer' column, so "
+              f"scores can only be matched to spacers by row order. If this "
+              f"build of launch-dCas9 reorders its output, the scores will be "
+              f"attached to the wrong guides. Columns: {list(preds.columns)}",
+              file=sys.stderr)
+        return dict(zip(spacers, preds["predict"].to_numpy()))
+
+    returned = preds[key_column].astype(str)
+    if returned.duplicated().any():
+        duplicated = returned[returned.duplicated()].unique()[:3]
+        raise SystemExit(
+            f"ERROR: {pred_csv.name} lists the same spacer more than once "
+            f"({', '.join(duplicated)}); cannot assign scores unambiguously."
+        )
+
+    values = preds["predict"].to_numpy()
+    exact = dict(zip(returned, values))
+    if all(s in exact for s in spacers):
+        return {s: exact[s] for s in spacers}
+
+    # Fall back to a case-insensitive match. hg38 is soft-masked, so a spacer
+    # over a repeat arrives lowercase, and a tool that normalises case would
+    # otherwise look like it had returned different sequences entirely.
+    folded = {}
+    for key, value in zip(returned, values):
+        folded.setdefault(key.upper(), value)
+    missing = [s for s in spacers if s.upper() not in folded]
+    if missing:
+        raise SystemExit(
+            f"ERROR: {len(missing)} spacer(s) sent for {outcome} scoring are "
+            f"absent from {pred_csv.name}, e.g. {', '.join(missing[:3])}.\n"
+            f"The prediction table does not describe the guides that were "
+            f"submitted; refusing to produce scores that may be misaligned."
+        )
+    return {s: folded[s.upper()] for s in spacers}
 
 
 def run(args):

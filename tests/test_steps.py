@@ -5,6 +5,8 @@ guides a user orders and synthesizes, so they are pinned explicitly --
 including the two worked examples from the original project notes.
 """
 
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -15,7 +17,7 @@ from cretarget.steps.prep_regions import (
 from cretarget.steps.rank import (
     FILTER_ORDER, first_fail_reason, minmax_norm, parse_in_genome_count, seed_score,
 )
-from cretarget.steps.launch_dcas9 import unique_valid_spacers
+from cretarget.steps.launch_dcas9 import _join_predictions, unique_valid_spacers
 
 
 # --------------------------------------------------------------------------
@@ -215,14 +217,90 @@ class TestValidateContigs:
 # launch-dCas9 input filtering
 # --------------------------------------------------------------------------
 
+A20 = "ACGT" * 5          # a valid 20 bp spacer
+T20 = "TTTT" * 5
+N20 = "ACGN" + "ACGT" * 4  # 20 bp but contains N
+
+
 class TestUniqueValidSpacers:
     def test_dedups_and_preserves_order(self):
-        assert unique_valid_spacers(["ACGT", "TTTT", "ACGT"]) == ["ACGT", "TTTT"]
+        assert unique_valid_spacers([A20, T20, A20]) == [A20, T20]
 
     def test_drops_non_atgc(self):
         # N-containing spacers cannot be one-hot encoded and would crash the
         # CNN; they must be filtered out and scored as NaN instead.
-        assert unique_valid_spacers(["ACGT", "ACGN", "AC-T", ""]) == ["ACGT"]
+        assert unique_valid_spacers([A20, N20, "AC-T", ""]) == [A20]
 
     def test_accepts_lowercase(self):
-        assert unique_valid_spacers(["acgt"]) == ["acgt"]
+        # hg38 is soft-masked, so a spacer over a repeat arrives lowercase.
+        assert unique_valid_spacers([A20.lower()]) == [A20.lower()]
+
+    def test_rejects_spacers_of_the_wrong_length(self):
+        # launch-dCas9's preprocess_seq() takes the length of the FIRST
+        # sequence and applies it to the whole batch, so a short one is
+        # zero-padded and a long one truncated -- silently, with a plausible
+        # score coming back either way. Letting a 19 bp spacer through would
+        # corrupt every score in the batch alongside it.
+        assert unique_valid_spacers([A20, A20[:19], A20 + "A"]) == [A20]
+
+    def test_all_wrong_length_yields_nothing(self):
+        assert unique_valid_spacers(["ACGT", "TTTT"]) == []
+
+
+# --------------------------------------------------------------------------
+# launch-dCas9 prediction join
+#
+# launch-dCas9 writes the input protospacer next to its score in a `grna`
+# column. Matching on that column rather than on row position is what keeps a
+# score attached to the guide it was computed for: a row-count check says
+# nothing about ORDER, and `--launch-script` points at a user-supplied clone
+# of an external project whose revision creTarget does not control.
+# --------------------------------------------------------------------------
+
+class TestJoinPredictions:
+    @staticmethod
+    def _preds(grnas, values):
+        return pd.DataFrame({"grna": grnas, "predict": values})
+
+    def test_matches_on_the_key_not_the_row_order(self):
+        spacers = [A20, T20]
+        # Predictions returned in the OPPOSITE order to the input.
+        preds = self._preds([T20, A20], [0.25, 0.75])
+        result = _join_predictions(preds, spacers, Path("p.csv"), "enhancerFitness")
+        assert result == {A20: 0.75, T20: 0.25}
+
+    def test_positional_zip_would_have_been_wrong_here(self):
+        # Pins the actual regression: the old implementation did
+        # dict(zip(spacers, preds["predict"])), which on reordered output
+        # attaches each score to the wrong spacer while exiting 0.
+        spacers = [A20, T20]
+        preds = self._preds([T20, A20], [0.25, 0.75])
+        positional = dict(zip(spacers, preds["predict"].to_numpy()))
+        keyed = _join_predictions(preds, spacers, Path("p.csv"), "enhancerFitness")
+        assert positional == {A20: 0.25, T20: 0.75}   # wrong
+        assert keyed != positional
+
+    def test_case_insensitive_fallback(self):
+        # Soft-masked (lowercase) input, uppercase returned.
+        spacers = [A20.lower()]
+        preds = self._preds([A20], [0.5])
+        result = _join_predictions(preds, spacers, Path("p.csv"), "enhancerFitness")
+        assert result == {A20.lower(): 0.5}
+
+    def test_unknown_spacer_is_an_error_not_a_guess(self):
+        preds = self._preds([T20], [0.5])
+        with pytest.raises(SystemExit):
+            _join_predictions(preds, [A20], Path("p.csv"), "enhancerFitness")
+
+    def test_duplicate_keys_are_an_error(self):
+        preds = self._preds([A20, A20], [0.1, 0.9])
+        with pytest.raises(SystemExit):
+            _join_predictions(preds, [A20], Path("p.csv"), "enhancerFitness")
+
+    def test_falls_back_to_order_when_there_is_no_key_column(self, capsys):
+        # An older build with no grna column: positional is all that is
+        # available, but it must say so rather than pretending to be sure.
+        preds = pd.DataFrame({"predict": [0.3, 0.6]})
+        result = _join_predictions(preds, [A20, T20], Path("p.csv"), "enhancerFitness")
+        assert result == {A20: 0.3, T20: 0.6}
+        assert "row order" in capsys.readouterr().err
