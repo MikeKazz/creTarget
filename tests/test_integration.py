@@ -222,19 +222,43 @@ class TestRank:
 
     def test_reports_max_possible_without_launch_dcas9(self, ranked):
         df = pd.read_csv(ranked, sep="\t")
+        passing = df[df["passes_hard_filters"]]
         # Compared with a tolerance, not ==. These values survive a CSV
         # round-trip, and exact float equality on a value that is a sum of
         # binary floats is fragile across pandas versions -- it passed on
         # pandas 3.x and failed on 2.x for identical inputs.
-        assert df["composite_score_max_possible"].to_numpy() == pytest.approx(0.58)
-        assert (df["composite_score"] <= 0.58 + 1e-9).all()
+        #
+        # max_possible is now per-row, because a missing component is dropped
+        # from the denominator rather than scored zero. Every guide in this
+        # fixture has a complete set, so all of them sit at the full scale.
+        assert passing["composite_components_missing"].eq(0).all()
+        assert passing["composite_score_max_possible"].to_numpy() == pytest.approx(0.58)
+        assert (passing["composite_score"] <= 0.58 + 1e-9).all()
 
     def test_normalized_score_is_on_unit_scale(self, ranked):
         df = pd.read_csv(ranked, sep="\t")
-        assert df["composite_score_normalized"].between(0, 1).all()
+        passing = df[df["passes_hard_filters"]]
+        assert passing["composite_score_normalized"].between(0, 1).all()
+        # Specifically the saturated case: the float sum of the weights can
+        # land a half-ulp above max_possible, which printed as
+        # 1.0000000000000002 for 77 of 266 rows in a real run.
+        assert passing["composite_score_normalized"].max() <= 1.0
 
     def test_excluded_guides_are_retained_and_labelled(self, ranked):
         df = pd.read_csv(ranked, sep="\t")
         excluded = df[~df["passes_hard_filters"]]
         assert len(excluded) > 0
         assert excluded["rank"].astype(str).str.startswith("exclude (").all()
+
+    def test_excluded_guides_carry_no_score(self, ranked):
+        # A guide excluded for a poly-T terminator will not transcribe at
+        # all, but used to be published with a fully-populated
+        # composite_score -- in one real run at normalized 0.9989, above most
+        # guides that passed. `rank` is a string for those rows, so sorting
+        # the table by score was the natural move and surfaced exactly them.
+        df = pd.read_csv(ranked, sep="\t")
+        excluded = df[~df["passes_hard_filters"]]
+        assert len(excluded) > 0
+        for column in ("composite_score", "composite_score_normalized",
+                       "composite_score_max_possible"):
+            assert excluded[column].isna().all(), column

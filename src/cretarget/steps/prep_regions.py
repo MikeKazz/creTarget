@@ -161,9 +161,32 @@ def validate_contigs(regions, chrom_sizes):
     that sends people hunting in the wrong direction.
     """
     known = set(chrom_sizes)
-    kept, dropped = [], []
+    kept, dropped, out_of_bounds = [], [], []
     for region in regions:
-        (kept if region["chrom"] in known else dropped).append(region)
+        if region["chrom"] not in known:
+            dropped.append(region)
+            continue
+        # The contig NAME matching is not enough: coordinates from a
+        # different assembly land on a real contig at an impossible offset.
+        # compute_window would then clamp the window down to a single base at
+        # the contig end, yield no guides, and say nothing at all -- the user
+        # just finds a region missing from the results with no explanation.
+        start = region.get("start")
+        if start is not None and start >= chrom_sizes[region["chrom"]]:
+            out_of_bounds.append(region)
+            continue
+        kept.append(region)
+
+    if out_of_bounds:
+        example = out_of_bounds[0]
+        length = chrom_sizes[example["chrom"]]
+        print(f"WARNING: dropped {len(out_of_bounds)} region(s) that start beyond "
+              f"the end of their contig, e.g. {example.get('name')} at "
+              f"{example['chrom']}:{example.get('start')}-{example.get('end')} on a "
+              f"contig of {length:,} bp.", file=sys.stderr)
+        print("HINT: coordinates past the end of a contig usually mean the input "
+              "is from a different genome assembly than the reference.",
+              file=sys.stderr)
 
     if dropped:
         missing = sorted({r["chrom"] for r in dropped})
@@ -184,8 +207,9 @@ def validate_contigs(regions, chrom_sizes):
 
     if not kept:
         raise SystemExit(
-            "ERROR: no input regions remain after contig validation -- every contig "
-            "in your input is absent from the reference .fai. See the hint above."
+            "ERROR: no input regions remain after contig validation -- every "
+            "region is either on a contig absent from the reference .fai or "
+            "starts beyond the end of its contig. See the hint above."
         )
     return kept
 
@@ -213,18 +237,47 @@ def make_names_unique(regions):
 
 
 def flag_linked_regions(regions, link_distance_bp):
-    """Marks same-contig regions within link_distance_bp of each other."""
+    """Marks same-contig regions within link_distance_bp of each other.
+
+    A proper interval sweep, comparing every region against all still-open
+    predecessors. It used to zip the start-sorted list against itself and so
+    compared only ADJACENT pairs, which misses any pair with another region
+    between them in start order -- including a region nested entirely inside
+    a wider one:
+
+        big   chr1:1000-9000
+        inner chr1:1100-1200
+        late  chr1:8000-8100     <- inside `big`, but `inner` sorts between
+                                    them, so `big` and `late` were never
+                                    compared and `late` was reported as
+                                    having no linked neighbour.
+
+    The bias was systematic: the wider the enhancer, the more neighbours it
+    hid. The column exists to warn that one guide may silence two targets,
+    so a false empty is the damaging direction.
+    """
     linked = {r["name"]: [] for r in regions}
     by_chrom = defaultdict(list)
     for region in regions:
         by_chrom[region["chrom"]].append(region)
 
     for regs in by_chrom.values():
-        regs_sorted = sorted(regs, key=lambda r: r["start"])
-        for a, b in zip(regs_sorted, regs_sorted[1:]):
-            if b["start"] - a["end"] < link_distance_bp:
-                linked[a["name"]].append(b["name"])
-                linked[b["name"]].append(a["name"])
+        regs_sorted = sorted(regs, key=lambda r: (r["start"], r["end"]))
+        # `open_regions` holds the predecessors that could still be within
+        # range, kept sorted by end so the ones that can never match again
+        # are dropped as the sweep advances.
+        open_regions = []
+        for current in regs_sorted:
+            still_open = []
+            for previous in open_regions:
+                # Distance between intervals; <= 0 means they touch/overlap.
+                gap = current["start"] - previous["end"]
+                if gap <= link_distance_bp:
+                    still_open.append(previous)
+                    linked[previous["name"]].append(current["name"])
+                    linked[current["name"]].append(previous["name"])
+            open_regions = still_open
+            open_regions.append(current)
     return linked
 
 

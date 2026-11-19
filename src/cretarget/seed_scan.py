@@ -308,10 +308,23 @@ def is_self_hit(locus, chrom, start, end):
     PAM sits on depends on orientation -- so containment is tested rather than
     an exact start, which would catch forward guides and miss every reverse
     one.
+
+    The two sides use different conventions and must be reconciled here:
+
+        locus        0-based half-open [start, end)   (from guides.ranked.tsv)
+        start/end    1-based inclusive [start, end]   (from the hit table)
+
+    `start - 1` converts the hit to 0-based. Comparing the 1-based start
+    directly against the 0-based locus start, as this used to, admitted one
+    extra base on the left -- a position lying entirely OUTSIDE the guide's
+    own span. A genuine off-target protospacer beginning one base before the
+    guide's own site was therefore reclassified as a self-hit and dropped
+    from seedfinder_hit_count. Such a site needs a shift-tolerant seed, i.e.
+    a homopolymer or repeat, which is exactly the risky case.
     """
     if not locus:
         return False
-    return locus[0] == chrom and start >= locus[1] and end <= locus[2]
+    return locus[0] == chrom and (start - 1) >= locus[1] and end <= locus[2]
 
 
 def pam_proximal_match_length(protospacer, spacer):

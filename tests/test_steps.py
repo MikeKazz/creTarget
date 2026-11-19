@@ -198,6 +198,39 @@ class TestFlagLinkedRegions:
         linked = flag_linked_regions(regions, 1000)
         assert linked["a"] == [] and linked["b"] == []
 
+    def test_finds_a_region_nested_inside_a_wider_one(self):
+        # The regression: comparing only ADJACENT pairs in start order meant
+        # `inner` sorted between `big` and `late`, so `big` was never compared
+        # with `late` even though `late` sits entirely inside it. The bias was
+        # systematic -- the wider the enhancer, the more neighbours it hid --
+        # and a falsely empty linked_regions is the damaging direction, since
+        # the column warns that one guide may silence two targets.
+        regions = [self._region("big", "chr1", 1000, 9000),
+                   self._region("inner", "chr1", 1100, 1200),
+                   self._region("late", "chr1", 8000, 8100)]
+        linked = flag_linked_regions(regions, 1000)
+        assert sorted(linked["big"]) == ["inner", "late"]
+        assert linked["late"] == ["big"]
+        assert linked["inner"] == ["big"]
+
+    def test_is_independent_of_input_order(self):
+        import itertools
+        regions = [self._region("big", "chr1", 1000, 9000),
+                   self._region("inner", "chr1", 1100, 1200),
+                   self._region("late", "chr1", 8000, 8100)]
+        seen = {
+            tuple(sorted((k, tuple(sorted(v)))
+                         for k, v in flag_linked_regions(list(p), 1000).items()))
+            for p in itertools.permutations(regions)
+        }
+        assert len(seen) == 1
+
+    def test_links_regions_exactly_at_the_distance_threshold(self):
+        # "within link_distance_bp" includes the boundary.
+        regions = [self._region("a", "chr1", 0, 100),
+                   self._region("b", "chr1", 1100, 1200)]
+        assert flag_linked_regions(regions, 1000)["a"] == ["b"]
+
 
 class TestValidateContigs:
     def test_drops_unknown_contigs_and_keeps_the_rest(self):

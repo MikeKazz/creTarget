@@ -195,6 +195,23 @@ class TestSelfHitDetection:
         locus = ("chr1", 9951, 9974)
         assert not ss.is_self_hit(locus, "chr1", 50_000, 50_019)
 
+    def test_a_site_starting_one_base_early_is_not_a_self_hit(self):
+        """The two sides use different conventions -- the locus is 0-based
+        half-open, the hit is 1-based inclusive -- and comparing them without
+        converting admitted one extra base on the left. That position lies
+        entirely outside the guide's own span, so a genuine off-target
+        beginning one base before the guide's site was reclassified as a
+        self-hit and dropped from the count. It needs a shift-tolerant
+        (homopolymer or repeat) seed, which is exactly the risky case.
+        """
+        locus = ("chr1", 9951, 9974)          # 0-based half-open, 23 bp
+        assert ss.is_self_hit(locus, "chr1", 9952, 9971)      # FWD protospacer
+        assert ss.is_self_hit(locus, "chr1", 9955, 9974)      # RVS protospacer
+        # One base before the guide's own span.
+        assert not ss.is_self_hit(locus, "chr1", 9951, 9970)
+        # One base after it.
+        assert not ss.is_self_hit(locus, "chr1", 9956, 9975)
+
     def test_the_same_offset_on_another_chromosome_is_not_a_self_hit(self):
         locus = ("chr1", 9951, 9974)
         assert not ss.is_self_hit(locus, "chr5", 9952, 9971)

@@ -222,7 +222,13 @@ def iter_guides(ranked_path, passing_only=True, id_prefix=None):
                         else None)
         chrom_index = (header.index(LOCUS_COLUMN)
                        if LOCUS_COLUMN in header else None)
+        if chrom_index is None:
+            print(f"WARNING: {ranked_path} has no {LOCUS_COLUMN!r} column, so a "
+                  f"guide cannot be recognised when it finds its own target "
+                  f"site. Self-hits will be counted as off-targets.",
+                  file=sys.stderr)
         width = max(idx.values())
+        unparseable_loci = 0
         for index, row in enumerate(reader):
             # csv.reader yields [] for a blank line, and a truncated row for a
             # table whose writer was killed mid-line. Both used to raise
@@ -242,7 +248,22 @@ def iter_guides(ranked_path, passing_only=True, id_prefix=None):
                              int(row[idx["genome_start"]]),
                              int(row[idx["genome_end"]]))
                 except (ValueError, IndexError):
-                    locus = None    # unparseable coordinates: screen anyway
+                    # Screen anyway, but say so. A locus of None disables
+                    # self-hit detection for that guide, and self-hits were
+                    # 73% of all hits in a genome-wide run -- so a silent
+                    # fallback here inflates seedfinder_hit_count several-fold
+                    # while the run exits 0. The usual cause was float
+                    # coordinates ("119869.0") reaching int().
+                    locus = None
+                    unparseable_loci += 1
+                    if unparseable_loci == 1:
+                        print(f"WARNING: cannot parse genome coordinates for "
+                              f"{row[idx['region_id']]!r} "
+                              f"({row[idx['genome_start']]!r}, "
+                              f"{row[idx['genome_end']]!r}); self-hit detection "
+                              f"is disabled for affected guides and "
+                              f"seedfinder_hit_count will be overstated.",
+                              file=sys.stderr)
             yield build_guide_id(
                 row[idx["region_id"]], row[idx["genome_start"]],
                 row[idx["genome_end"]],
@@ -265,11 +286,18 @@ def write_annotated(ranked_path, out_path, summary, passing_only=True,
                         if passing_only and "passes_hard_filters" in header
                         else None)
 
-        dst.write("\t".join(header + SUMMARY_COLUMNS) + "\n")
+        # A csv.writer, to match the csv.reader above. Reading strips any
+        # quoting and "\t".join put none back, so a quoted field containing a
+        # tab would have been re-emitted as two columns and shifted every
+        # later field in that row.
+        writer = csv.writer(dst, delimiter="\t", lineterminator="\n")
+        writer.writerow(header + SUMMARY_COLUMNS)
         width = max(idx.values())
+        skipped = 0
         for index, row in enumerate(reader):
             # Mirrors the skip in iter_guides, so the two passes stay in step.
             if len(row) <= width:
+                skipped += 1
                 continue
             guide_id = build_guide_id(
                 row[idx["region_id"]], row[idx["genome_start"]],
@@ -277,10 +305,18 @@ def write_annotated(ranked_path, out_path, summary, passing_only=True,
                 row[orientation_index] if orientation_index is not None else "NA",
                 index, id_prefix,
             )
-            dst.write("\t".join(
-                row + summary.row_for(guide_id, _is_screened(row, filter_index))
-            ) + "\n")
+            writer.writerow(
+                row + summary.row_for(guide_id, _is_screened(row, filter_index)))
             written += 1
+
+    # This pass writes the deliverable, so a row dropped here vanishes from
+    # guides.final.tsv entirely. iter_guides warns about short rows; this one
+    # used to drop them with no record anywhere, and nobody diffs row counts
+    # between the ranked and final tables by hand on a 92M-guide run.
+    if skipped:
+        print(f"WARNING: {skipped} malformed row(s) in {ranked_path} are ABSENT "
+              f"from {out_path}, which has {written} rows against the input's "
+              f"{written + skipped}.", file=sys.stderr)
     return written
 
 

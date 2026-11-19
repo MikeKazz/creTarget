@@ -135,11 +135,26 @@ def run(args):
     df["passes_hard_filters"] = df["exclude_reason"].isna()
 
     hsu_norm = (pd.to_numeric(df["Hsu2013"], errors="coerce") / 100.0).clip(0, 1)
+
+    # --- closest-hit distance ---
+    raw_closest = df["basesDiffToClosestHit"]
     closest_norm = (
-        pd.to_numeric(df["basesDiffToClosestHit"], errors="coerce") / args.max_mismatch
+        pd.to_numeric(raw_closest, errors="coerce") / args.max_mismatch
     ).clip(upper=1.0)
-    # No off-target found inside the search radius -> treat as maximally safe.
-    closest_norm = closest_norm.fillna(1.0)
+    # "UNK" is FlashFry's sentinel for "no off-target found", not for "not
+    # computed": ClosestHit.scala emits it exactly when `closest ==
+    # Int.MaxValue`, i.e. when no off-target with >=1 mismatch existed, and
+    # writes closestOTCount 0 alongside. Maximally safe is therefore the
+    # right reading. Any OTHER unparseable value is a genuine unknown and
+    # must not quietly collect full credit for safety.
+    is_sentinel = raw_closest.astype(str).str.strip().str.upper().eq("UNK")
+    closest_norm = closest_norm.mask(is_sentinel, 1.0)
+    unresolved = closest_norm.isna()
+    if unresolved.any():
+        print(f"WARNING: {int(unresolved.sum())} guide(s) have an unreadable "
+              f"basesDiffToClosestHit (e.g. "
+              f"{raw_closest[unresolved].iloc[0]!r}); the closest-distance term "
+              f"is omitted for them rather than assumed safe.", file=sys.stderr)
 
     if "FreeEnergy20" in df.columns:
         df["_fe"] = pd.to_numeric(df["FreeEnergy20"], errors="coerce")
@@ -147,29 +162,46 @@ def run(args):
         df["_fe"] = 0.0
     folding_norm = df.groupby("region_id")["_fe"].transform(minmax_norm).fillna(0.5)
 
-    composite = (
-        WEIGHTS["jost_crispri"]
-        * pd.to_numeric(df["JostCRISPRi_specificityscore"], errors="coerce").fillna(0)
-        + WEIGHTS["hsu2013"] * hsu_norm.fillna(0)
-        + WEIGHTS["cfd_specificity"]
-        * pd.to_numeric(df["DoenchCFD_specificityscore"], errors="coerce").fillna(0)
-        + WEIGHTS["closest_distance"] * closest_norm
-        + WEIGHTS["folding"] * folding_norm
-    )
-
+    # Components are assembled as a dict so a MISSING one can be dropped from
+    # the denominator as well as the numerator.
+    #
+    # They used to be .fillna(0)'d into a fixed-denominator sum, which scores
+    # "we never measured this" identically to "we measured it and it is the
+    # worst possible". That is not a small distinction here: launch-dCas9
+    # deliberately returns NaN for any spacer it cannot encode, so those
+    # guides silently lost 30% of the scale and were published with a
+    # confident-looking mid-range score. Excluding the component instead keeps
+    # composite_score_normalized meaning "of what we could measure, how good
+    # is this guide".
+    terms = {
+        "jost_crispri": pd.to_numeric(
+            df["JostCRISPRi_specificityscore"], errors="coerce").clip(0, 1),
+        "hsu2013": hsu_norm,
+        "cfd_specificity": pd.to_numeric(
+            df["DoenchCFD_specificityscore"], errors="coerce").clip(0, 1),
+        "closest_distance": closest_norm,
+        "folding": folding_norm,
+    }
     has_launch = "launch_dCas9_enhancer" in df.columns
     if has_launch:
-        composite += WEIGHTS["launch_enhancer"] * pd.to_numeric(
-            df["launch_dCas9_enhancer"], errors="coerce").fillna(0)
-        max_possible = MAX_WITH_LAUNCH
-    else:
-        max_possible = MAX_WITHOUT_LAUNCH
+        # The only component with no documented range, so it is the only one
+        # that could push the sum outside [0, max_possible].
+        terms["launch_enhancer"] = pd.to_numeric(
+            df["launch_dCas9_enhancer"], errors="coerce").clip(0, 1)
+
+    composite = sum(WEIGHTS[name] * value.fillna(0) for name, value in terms.items())
+    # Per-row: only the weights of the components this row actually has.
+    max_possible = sum(WEIGHTS[name] * value.notna() for name, value in terms.items())
 
     df["composite_score"] = composite
-    df["composite_score_max_possible"] = max_possible
-    # Scale-free companion so a run with launch-dCas9 and one without are
-    # visually comparable; composite_score itself keeps its absolute meaning.
-    df["composite_score_normalized"] = composite / max_possible
+    df["composite_score_max_possible"] = max_possible.round(6)
+    # Scale-free companion, and the column to compare BETWEEN guides when any
+    # component may be missing. Clipped because the float sum of the weights
+    # can land a half-ulp above max_possible and print as 1.0000000000000002.
+    df["composite_score_normalized"] = (
+        composite / max_possible.replace(0, pd.NA)).clip(0, 1)
+    df["composite_components_missing"] = sum(
+        value.isna().astype(int) for value in terms.values())
     df = df.drop(columns=["_fe"])
 
     df["rank"] = None
@@ -186,6 +218,15 @@ def run(args):
     df.loc[excluded, "rank"] = (
         "exclude (" + df.loc[excluded, "exclude_reason"].astype(str) + ")"
     )
+    # Blank the scores for excluded guides too, so the three columns agree.
+    # `rank` was already labelled "exclude (...)", but composite_score was
+    # left populated -- and a guide failing the poly-T filter (which will not
+    # transcribe at all) was published at composite_score_normalized 0.999,
+    # above most guides that passed. `rank` is a string there, so sorting the
+    # table by score was the natural move and surfaced exactly those rows.
+    for column in ("composite_score", "composite_score_normalized",
+                   "composite_score_max_possible"):
+        df.loc[excluded, column] = pd.NA
 
     df["_sort_rank"] = pd.to_numeric(df["rank"], errors="coerce")
     df = df.sort_values(
@@ -198,13 +239,22 @@ def run(args):
     n_pass = int(df["passes_hard_filters"].sum())
     print(f"Wrote {len(df)} guides ({n_pass} passing hard filters) -> {args.out}",
           file=sys.stderr)
+    # max_possible varies per row now, so report the usual (complete) case.
+    full_scale = MAX_WITH_LAUNCH if has_launch else MAX_WITHOUT_LAUNCH
     if has_launch:
         print(f"composite_score includes launch_dCas9_enhancer "
-              f"(max possible {max_possible:.2f}); launch_dCas9_promoter is reported "
+              f"(max possible {full_scale:.2f}); launch_dCas9_promoter is reported "
               f"but not ranked on.", file=sys.stderr)
     else:
         print(f"NOTE: no launch_dCas9_enhancer column -- composite_score omits it "
-              f"(max possible {max_possible:.2f}).", file=sys.stderr)
+              f"(max possible {full_scale:.2f}).", file=sys.stderr)
+    incomplete = int((df["composite_components_missing"] > 0).sum())
+    if incomplete:
+        print(f"NOTE: {incomplete} guide(s) are missing at least one score "
+              f"component; those components are excluded from both their "
+              f"composite_score and their composite_score_max_possible rather "
+              f"than counted as zero. Compare such guides on "
+              f"composite_score_normalized.", file=sys.stderr)
     return args.out
 
 

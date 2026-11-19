@@ -69,7 +69,11 @@ def load_metadata_subset(metadata_path, region_ids):
     meta = pd.DataFrame(rows, columns=reader.fieldnames)
     for col in METADATA_NUMERIC:
         if col in meta.columns:
-            meta[col] = pd.to_numeric(meta[col], errors="coerce")
+            # Int64 (nullable) rather than int64: an unmatched region in the
+            # left join would otherwise turn the whole column float, so every
+            # coordinate in the published table gained a ".0" suffix and
+            # downstream int() parsing broke.
+            meta[col] = pd.to_numeric(meta[col], errors="coerce").astype("Int64")
     return meta
 
 
@@ -182,8 +186,20 @@ def run(args):
     if guides.empty:
         raise SystemExit("ERROR: no guides left after contig parsing")
 
-    guides["genome_start"] = guides["window_padded_start"] + guides["start"]
-    guides["genome_end"] = guides["window_padded_start"] + guides["stop"]
+    # astype("int64") is load-bearing, not tidiness. parse_contig returns None
+    # for an unparseable contig, which makes pandas build window_padded_start
+    # as float64 -- and dropping the offending ROW above does not restore the
+    # COLUMN's dtype. Every surviving coordinate then became a float, so
+    # genome_start was written as "119869.0", and seed_finder's
+    # `int(row["genome_start"])` raised ValueError into a handler that
+    # silently sets locus = None. The effect was that self-hit detection was
+    # switched off for the whole run by one malformed row elsewhere in the
+    # chunk -- and self-hits were 73% of all hits in a genome-wide run, so
+    # seedfinder_hit_count inflated roughly fourfold while the run exited 0.
+    guides["genome_start"] = (
+        guides["window_padded_start"] + guides["start"]).astype("int64")
+    guides["genome_end"] = (
+        guides["window_padded_start"] + guides["stop"]).astype("int64")
 
     meta = load_metadata_subset(args.region_metadata, guides["region_id"].unique())
     if meta.empty:
@@ -201,17 +217,48 @@ def run(args):
 
     merged = guides.merge(meta, on="region_id", how="left", validate="many_to_one")
 
-    n_unmatched = merged["target_ref"].isna().sum()
-    if n_unmatched:
-        print(f"WARNING: {n_unmatched} guide(s) did not match a region_id in metadata",
-              file=sys.stderr)
+    unmatched = merged["target_ref"].isna()
+    if unmatched.any():
+        fraction = float(unmatched.mean())
+        example = merged.loc[unmatched, "region_id"].iloc[0]
+        print(f"WARNING: {int(unmatched.sum())} guide(s) ({fraction:.1%}) did not "
+              f"match a region_id in metadata, e.g. {example!r}", file=sys.stderr)
+        # A total join failure already raises above. A PARTIAL one was the
+        # silent case: every coordinate column floats to NaN, and the
+        # unmatched guides are published with coordinates that cannot be
+        # checked against a target.
+        if fraction > 0.01:
+            raise SystemExit(
+                f"ERROR: {fraction:.1%} of guides failed the metadata join, which "
+                f"means their region metadata is missing rather than merely "
+                f"incomplete. Are the scored input and the metadata from the same "
+                f"prep-regions run? (A region name containing whitespace can be "
+                f"truncated by FlashFry and will not match.)"
+            )
 
     guide_mid = (merged["genome_start"] + merged["genome_end"]) / 2
     merged["distance_to_target"] = (guide_mid - merged["target_ref"]).abs()
-    merged["within_blast_radius"] = merged["distance_to_target"] <= args.blast_radius_bp
+    # .where(~unmatched) keeps this as NA rather than False for a guide whose
+    # target is unknown. `NaN <= blast_radius` is False, which reported "we
+    # measured it and it is outside" when the truth is "we could not measure".
+    merged["within_blast_radius"] = (
+        merged["distance_to_target"] <= args.blast_radius_bp).where(~unmatched)
 
     if args.atac_narrowpeak:
         summits = load_atac_summits(args.atac_narrowpeak)
+        # A naming mismatch between the peaks and the reference leaves EVERY
+        # distance NaN, which is indistinguishable from the legitimate "this
+        # contig has no peaks". prep_regions diagnoses exactly this for the
+        # target BED; --atac-narrowpeak takes an equally arbitrary user file.
+        guide_contigs = set(merged["genome_chrom"].dropna().unique())
+        if guide_contigs and not (guide_contigs & set(summits)):
+            raise SystemExit(
+                f"ERROR: no contig in {args.atac_narrowpeak} matches any guide "
+                f"contig, so every ATAC distance would be NaN.\n"
+                f"  guide contigs: {sorted(guide_contigs)[:3]}\n"
+                f"  peak contigs:  {sorted(summits)[:3]}\n"
+                f"This is usually UCSC ('chr1') vs Ensembl ('1') naming."
+            )
         merged["distance_to_atac_summit"] = nearest_summit_distances(
             merged["genome_chrom"], guide_mid, summits)
         n_nan = int(merged["distance_to_atac_summit"].isna().sum())
