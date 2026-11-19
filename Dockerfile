@@ -1,10 +1,20 @@
 # creTarget runtime image.
 #
 # Build:
-#   docker build -t ghcr.io/mikekazz/cretarget:0.6.0 .
+#   docker build --platform linux/amd64 -t ghcr.io/mikekazz/cretarget:0.6.0 .
 #
 # Publish:
 #   docker push ghcr.io/mikekazz/cretarget:0.6.0
+#
+# --platform is NOT optional on an Apple Silicon Mac. Docker Desktop there
+# builds for the host architecture by default, so you would push an arm64
+# image; every HPC cluster is x86-64 and each task would die with "exec
+# format error" the first time someone used -profile singularity. Published
+# images through 0.5.1 are linux/amd64 and the next one must match. Building
+# on a Linux x86-64 host needs no flag.
+#
+# Check what you built before pushing:
+#   docker image inspect ghcr.io/mikekazz/cretarget:0.6.0 --format '{{.Os}}/{{.Architecture}}'
 #
 # Use:
 #   nextflow run MikeKazz/creTarget -profile slurm,singularity \
