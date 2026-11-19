@@ -81,12 +81,39 @@ def load_atac_summits(narrowpeak_path):
     """
     cols = ["chrom", "start", "end", "name", "score", "strand",
             "signalValue", "pValue", "qValue", "peak"]
-    df = pd.read_csv(narrowpeak_path, sep="\t", header=None, names=cols,
-                     comment="#", usecols=range(10))
+    # --atac-narrowpeak takes an arbitrary user file, so the width is not
+    # guaranteed. usecols=range(10) raised a bare ValueError on the BED6-style
+    # peak files some callers emit; read first, then validate and pad.
+    df = pd.read_csv(narrowpeak_path, sep="\t", header=None, comment="#")
+    if df.shape[1] < 3:
+        raise SystemExit(
+            f"ERROR: {narrowpeak_path} has {df.shape[1]} column(s); a "
+            f"narrowPeak/BED file needs at least chrom, start and end.\n"
+            f"Is it tab-separated?"
+        )
+    df = df.iloc[:, :10]
+    df.columns = cols[:df.shape[1]]
 
-    summit = (df["start"] + df["peak"]).astype("int64")
-    no_summit = df["peak"] < 0
-    summit = summit.mask(no_summit, (df["start"] + df["end"]) // 2)
+    for column in ("start", "end"):
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    if df[["start", "end"]].isna().any().any():
+        bad = int(df[["start", "end"]].isna().any(axis=1).sum())
+        raise SystemExit(
+            f"ERROR: {narrowpeak_path} has {bad} row(s) with a non-numeric "
+            f"start/end. Does the file have a header line? Comment it with '#'."
+        )
+
+    # MACS2/SEACR variants write '.' for an uncalled summit, which made the
+    # column object dtype and the comparison below a TypeError. Absent column
+    # or unparseable value both mean "no summit", i.e. use the midpoint.
+    if "peak" in df.columns:
+        peak = pd.to_numeric(df["peak"], errors="coerce").fillna(-1)
+    else:
+        peak = pd.Series(-1, index=df.index)
+
+    midpoint = ((df["start"] + df["end"]) // 2).astype("int64")
+    summit = (df["start"] + peak).astype("int64")
+    summit = summit.mask(peak < 0, midpoint)
 
     summits_by_chrom = {
         chrom: np.sort(group.to_numpy())

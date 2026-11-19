@@ -10,6 +10,7 @@ components report their status without failing the run.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -25,7 +26,7 @@ FAIL = "  FAIL    "
 
 
 def _tool_version(name, flag="--version"):
-    """Best-effort version string.
+    """Runs the tool and returns (ran_successfully, first_output_line).
 
     errors="replace" is not optional: some builds of samtools emit a
     copyright line containing non-UTF-8 bytes, which otherwise raises
@@ -38,20 +39,52 @@ def _tool_version(name, flag="--version"):
             errors="replace",
         )
         output = (proc.stdout or proc.stderr).strip().splitlines()
-        return output[0].strip() if output else "(version unknown)"
-    except Exception:
-        return "(version unknown)"
+        first = output[0].strip() if output else "(version unknown)"
+        return proc.returncode == 0, first
+    except Exception as exc:
+        return False, f"could not execute: {exc}"
 
 
-def _check_tool(name, required, hint, version_flag="--version"):
+def _parse_version(text):
+    """First dotted numeric run in a version string, as a tuple of ints."""
+    match = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", text or "")
+    if not match:
+        return None
+    return tuple(int(g) for g in match.groups(default="0"))
+
+
+def _check_tool(name, required, hint, version_flag="--version", min_version=None):
+    """Being on PATH is not the same as working.
+
+    This used to report OK on the strength of shutil.which() alone, so a
+    `java` shim with no JVM behind it, or a module that failed to load,
+    passed the check and the run then died inside FlashFry. The tool is now
+    actually executed, and a non-zero exit is a failure.
+    """
     path = shutil.which(name)
-    if path:
-        print(f"{OK}{name}: {_tool_version(name, version_flag)}")
-        return True
-    marker = FAIL if required else WARN
-    status = "required" if required else "optional"
-    print(f"{marker}{name}: not found on PATH ({status}) -- {hint}")
-    return not required
+    if not path:
+        marker = FAIL if required else WARN
+        status = "required" if required else "optional"
+        print(f"{marker}{name}: not found on PATH ({status}) -- {hint}")
+        return not required
+
+    ran, version = _tool_version(name, version_flag)
+    if not ran:
+        marker = FAIL if required else WARN
+        print(f"{marker}{name}: found at {path} but failed to run -- {version}")
+        if required:
+            print(f"          {hint}")
+        return not required
+
+    if min_version:
+        found = _parse_version(version)
+        if found and found < min_version:
+            want = ".".join(str(n) for n in min_version)
+            print(f"{FAIL}{name}: {version} is older than the required {want}")
+            return False
+
+    print(f"{OK}{name}: {version}")
+    return True
 
 
 def _check_file(label, path, required, hint=""):
@@ -78,7 +111,10 @@ def run(args):
     print()
 
     print("== External tools ==")
-    ok &= _check_tool("bedtools", True, "conda install -c bioconda bedtools")
+    # 2.27 is the floor: `bedtools getfasta -nameOnly`, used when building the
+    # seed reference, does not exist before it.
+    ok &= _check_tool("bedtools", True, "conda install -c bioconda bedtools",
+                      min_version=(2, 27))
     ok &= _check_tool("samtools", True, "conda install -c bioconda samtools")
     ok &= _check_tool("java", True, "needed by FlashFry and Nextflow; install a JRE >= 11",
                       version_flag="-version")

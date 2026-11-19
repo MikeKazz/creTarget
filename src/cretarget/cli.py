@@ -104,6 +104,20 @@ def cmd_configure(args):
         print("  cretarget configure --set reference.fasta=/path/to/hg38.fa")
 
 
+def cmd_cache_dir(args):
+    """Prints the resolved cache directory, and nothing else.
+
+    Exists so the Nextflow side can ask where the cache is instead of
+    re-implementing the resolution order in Groovy. It had its own copy, which
+    consulted $CRETARGET_CACHE_DIR and then the JVM's `user.home` -- so it
+    ignored [cache].dir from config.toml entirely, and on Linux `user.home`
+    comes from the passwd entry rather than $HOME. Either difference sent
+    Nextflow looking for the seed reference somewhere the user had never
+    built it.
+    """
+    print(cfg.cache_dir(cfg.load_config()))
+
+
 def cmd_fetch_models(args):
     config = cfg.load_config()
     fetch.fetch_models(dest=args.outdir, force=args.force, config=config)
@@ -202,6 +216,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--outdir", default=None)
     p.add_argument("--force", action="store_true")
     p.set_defaults(func=cmd_setup_reference)
+
+    p = sub.add_parser("cache-dir",
+                       help="print the resolved cache directory and exit")
+    p.set_defaults(func=cmd_cache_dir)
 
     p = sub.add_parser("doctor", help="check tools, config, and cached data")
     doctor_mod.add_arguments(p)

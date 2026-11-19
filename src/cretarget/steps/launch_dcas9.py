@@ -19,6 +19,7 @@ way creTarget does not have to be installed inside the conda env.
 """
 
 import argparse
+import contextlib
 import os
 import re
 import subprocess
@@ -127,15 +128,24 @@ def run(args):
     print(f"Scoring {len(spacers)} unique spacer(s) from {len(df)} guide row(s)",
           file=sys.stderr)
 
-    workdir = args.workdir or tempfile.mkdtemp(prefix="launch_dcas9_", dir=os.getcwd())
-    for outcome, column in OUTCOMES.items():
-        predictions = score_outcome(
-            spacers, outcome, launch_script, ckpt_dir, args.python_bin, workdir)
-        df[column] = df["spacer"].map(predictions)
-        n_missing = int(df[column].isna().sum())
-        if n_missing:
-            print(f"WARNING: {n_missing} guide(s) have no {column} score "
-                  f"(unscored/non-ATGC spacer)", file=sys.stderr)
+    # Scratch goes to $TMPDIR (node-local, and auto-cleaned on SLURM sites
+    # using job_container/tmpfs), not the current directory. dir=os.getcwd()
+    # overrode tempfile's own TMPDIR handling, which put per-spacer CSVs on
+    # the shared filesystem -- slower, and an outright failure when the
+    # working directory is read-only. ExitStack removes the directory
+    # afterwards; mkdtemp left one behind on every interactive run.
+    # Nextflow passes --workdir . explicitly, so pipeline runs are unchanged.
+    with contextlib.ExitStack() as stack:
+        workdir = args.workdir or stack.enter_context(
+            tempfile.TemporaryDirectory(prefix="launch_dcas9_"))
+        for outcome, column in OUTCOMES.items():
+            predictions = score_outcome(
+                spacers, outcome, launch_script, ckpt_dir, args.python_bin, workdir)
+            df[column] = df["spacer"].map(predictions)
+            n_missing = int(df[column].isna().sum())
+            if n_missing:
+                print(f"WARNING: {n_missing} guide(s) have no {column} score "
+                      f"(unscored/non-ATGC spacer)", file=sys.stderr)
 
     df.to_csv(args.out, sep="\t", index=False)
     print(f"Wrote {len(df)} guides with launch-dCas9 scores -> {args.out}",
@@ -154,5 +164,6 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
                         help="python from the launch-dCas9 conda env (needs torch)")
     parser.add_argument("--workdir", default=None,
                         help="scratch directory for intermediate files "
-                             "(default: a temp dir in the current directory)")
+                             "(default: a temp dir under $TMPDIR, removed "
+                             "when the step finishes)")
     parser.add_argument("--out", default="guides.annotated.with_launch.tsv")

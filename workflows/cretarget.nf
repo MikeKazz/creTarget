@@ -42,6 +42,43 @@ include { RANK                    } from '../modules/local/rank'
 include { SEED_FINDER             } from '../modules/local/seed_finder'
 include { RUN_MANIFEST            } from '../modules/local/run_manifest'
 
+/*
+ * Where `cretarget build-seed-reference` put its output.
+ *
+ * Asks the installed CLI rather than re-deriving the path here. The previous
+ * Groovy copy of the resolution order disagreed with the Python one in two
+ * ways, and both produced "file not found" against a path the user had never
+ * chosen:
+ *
+ *   1. It never consulted [cache].dir in config.toml, so anyone who set the
+ *      cache location with `cretarget configure` instead of the environment
+ *      variable was sent to ~/.cretarget regardless.
+ *   2. It used the JVM's `user.home`, which on Linux comes from the passwd
+ *      entry and ignores $HOME (OpenJDK consults $HOME only as a fallback).
+ *      Python's Path.home() follows $HOME. Clusters that relocate HOME --
+ *      per-job scratch homes, or a container with --home remapped -- made the
+ *      two resolve differently with no warning.
+ *
+ * Falls back to the environment variable, then $HOME, for the case where the
+ * launch host has no `cretarget` on PATH (a container-only install).
+ */
+def resolveCacheDir() {
+    try {
+        def proc = ['cretarget', 'cache-dir'].execute()
+        def out = new StringBuilder()
+        def err = new StringBuilder()
+        proc.waitForProcessOutput(out, err)
+        if (proc.exitValue() == 0 && out.toString().trim()) {
+            return out.toString().trim()
+        }
+    }
+    catch (Exception e) {
+        // not installed on the launch host -- fall through
+    }
+    def home = System.getenv('HOME') ?: System.getProperty('user.home')
+    return System.getenv('CRETARGET_CACHE_DIR') ?: "${home}/.cretarget"
+}
+
 workflow CRETARGET {
 
     take:
@@ -165,12 +202,29 @@ workflow CRETARGET {
          * channel error at launch, not a task failure after the whole ranking
          * stage has already run.
          */
-        def cache_root = System.getenv('CRETARGET_CACHE_DIR')
-            ?: "${System.getProperty('user.home')}/.cretarget"
+        def cache_root = resolveCacheDir()
         ch_seed_promoter_fa = params.seed_finder_promoter_fa
             ?: "${cache_root}/seed_reference/promoter_windows.fa.gz"
         ch_seed_tss_table = params.seed_finder_tss_table
             ?: "${cache_root}/seed_reference/tss_table.tsv"
+
+        // A missing reference is the common first-run failure here, and the
+        // default path is derived rather than given, so say where we looked
+        // and how to change it instead of only "No such file".
+        [ch_seed_promoter_fa, ch_seed_tss_table].each { p ->
+            if (!file(p).exists()) {
+                log.error """
+                |Seed reference not found: ${p}
+                |
+                |Resolved cache directory: ${cache_root}
+                |Build it once with:   cretarget build-seed-reference --fasta <hg38.fa>
+                |Or point at an existing one:
+                |    --seed_finder_promoter_fa / --seed_finder_tss_table
+                |Or set CRETARGET_CACHE_DIR to where you built it.
+                """.stripMargin()
+                System.exit(1)
+            }
+        }
 
         ch_seed_input = params.seed_finder_max_guides
             ? ch_ranked.splitText(

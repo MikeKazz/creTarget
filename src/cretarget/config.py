@@ -23,10 +23,37 @@ try:
 except ImportError:  # pragma: no cover - exercised only on 3.10
     import tomli as tomllib  # type: ignore
 
-CONFIG_DIR = Path(
-    os.environ.get("CRETARGET_CONFIG_DIR", Path.home() / ".config" / "cretarget")
-)
-CONFIG_PATH = CONFIG_DIR / "config.toml"
+def config_dir() -> Path:
+    """Resolution order: $CRETARGET_CONFIG_DIR -> $XDG_CONFIG_HOME/cretarget
+    -> ~/.config/cretarget
+
+    Resolved on every call rather than once at import. The old module-level
+    constant was captured the moment `cretarget` was imported, so a test (or
+    a wrapper script) that set CRETARGET_CONFIG_DIR afterwards was ignored.
+    """
+    env = os.environ.get("CRETARGET_CONFIG_DIR")
+    if env:
+        return Path(expand(env))
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(expand(xdg)) if xdg else Path.home() / ".config"
+    return base / "cretarget"
+
+
+def config_path() -> Path:
+    return config_dir() / "config.toml"
+
+
+def __getattr__(name):
+    """Keeps CONFIG_DIR / CONFIG_PATH working as module attributes.
+
+    They are now resolved per access instead of at import, so overriding
+    CRETARGET_CONFIG_DIR takes effect whenever it is set.
+    """
+    if name == "CONFIG_DIR":
+        return config_dir()
+    if name == "CONFIG_PATH":
+        return config_path()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 DEFAULT_CONFIG = """\
 # creTarget config (step-level CLI).
@@ -53,21 +80,57 @@ promoter_fa = ""        # optional: overrides the reference built by `cretarget 
 tss_table = ""          # optional: as above
 
 [cache]
-dir = ""                # optional: overrides CRETARGET_CACHE_DIR / ~/.cretarget
+# Where downloaded references/checkpoints live. Default ~/.cretarget.
+# $CRETARGET_CACHE_DIR takes precedence over this if it is set.
+dir = ""
 """
 
 
 def ensure_config_exists() -> Path:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    if not CONFIG_PATH.exists():
-        CONFIG_PATH.write_text(DEFAULT_CONFIG)
-    return CONFIG_PATH
+    """Creates the config file. Only for commands that intend to WRITE one."""
+    path = config_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            # Write-then-rename, so two tasks starting at once can never see
+            # a half-written file.
+            tmp = path.with_suffix(f".toml.tmp.{os.getpid()}")
+            tmp.write_text(DEFAULT_CONFIG)
+            tmp.replace(path)
+    except OSError as exc:
+        raise SystemExit(
+            f"ERROR: cannot create the config file at {path}: {exc}\n"
+            f"Point creTarget somewhere writable:\n"
+            f"    export CRETARGET_CONFIG_DIR=/path/you/can/write"
+        ) from exc
+    return path
 
 
 def load_config() -> dict:
-    ensure_config_exists()
-    with open(CONFIG_PATH, "rb") as f:
-        return tomllib.load(f)
+    """Reads the config. A missing config is NOT an error, and reading never
+    writes.
+
+    This used to call ensure_config_exists(), which made every *read* a
+    *write* to $HOME -- on every compute node, inside every container task.
+    Where $HOME was read-only or owned by another uid (the `docker` profile
+    runs as the host uid, while the image's home belongs to uid 1000) that
+    turned an optional convenience file into an unhandled PermissionError in
+    every task, and crashed `cretarget doctor` before it could report a
+    single thing.
+    """
+    path = config_path()
+    if not path.is_file():
+        return {}
+    try:
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+    except OSError as exc:
+        raise SystemExit(f"ERROR: cannot read the config file at {path}: {exc}") from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise SystemExit(
+            f"ERROR: {path} is not valid TOML: {exc}\n"
+            f"Fix it, or delete it to start from the default."
+        ) from exc
 
 
 def expand(value: str) -> str:
@@ -90,7 +153,7 @@ def require_path(config: dict, section: str, key: str) -> str:
     val = get_path(config, section, key)
     if not val:
         raise SystemExit(
-            f"ERROR: [{section}].{key} is not set in {CONFIG_PATH}\n"
+            f"ERROR: [{section}].{key} is not set in {config_path()}\n"
             f"Set it with:  cretarget configure --set {section}.{key}=/path/to/thing\n"
             f"(or pass the equivalent command-line flag)."
         )
@@ -142,9 +205,20 @@ def _dump_toml(config: dict) -> str:
     TOML dependency for this.
     """
     lines = ["# creTarget config -- `cretarget configure --set section.key=value`", ""]
-    for section, values in config.items():
+    # sorted() so rewriting the file twice produces the same bytes.
+    for section, values in sorted(config.items()):
+        if not isinstance(values, dict):
+            raise SystemExit(
+                f"ERROR: {config_path()} has a top-level '{section}' value outside "
+                f"any section. creTarget's config is flat sections of strings."
+            )
         lines.append(f"[{section}]")
-        for key, value in values.items():
+        for key, value in sorted(values.items()):
+            if isinstance(value, (dict, list)):
+                raise SystemExit(
+                    f"ERROR: {section}.{key} in {config_path()} is a "
+                    f"{type(value).__name__}; only single values are supported."
+                )
             lines.append(f'{key} = "{_toml_escape(value)}"')
         lines.append("")
     return "\n".join(lines)
@@ -165,6 +239,10 @@ def cache_dir(config: dict | None = None) -> Path:
     Kept in one place because every downloadable asset (model checkpoints,
     ATAC peaks, reference genome) has to agree on it, and because clusters
     routinely need it pointed somewhere other than $HOME.
+
+    `cretarget cache-dir` prints the result of this function. The Nextflow
+    side calls that rather than re-deriving the path, so the two can never
+    disagree about where the seed reference was built.
     """
     env = os.environ.get("CRETARGET_CACHE_DIR")
     if env:

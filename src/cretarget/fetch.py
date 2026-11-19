@@ -16,8 +16,11 @@ node -- never by silently attempting a download mid-run.
 
 import gzip
 import hashlib
+import http.client
 import json
+import os
 import shutil
+import socket
 import subprocess
 import sys
 import tarfile
@@ -27,13 +30,27 @@ from pathlib import Path
 
 from . import config as cfg
 
+# Hosts can be redirected to an institutional mirror, or to a pre-staged
+# local directory with a file:// URL, without editing installed source. Sites
+# with outbound allow-lists often permit one of these hosts and not the
+# other, so they are overridable independently.
+ZENODO_BASE = os.environ.get("CRETARGET_ZENODO_BASE", "https://zenodo.org/records")
+GENCODE_BASE = os.environ.get(
+    "CRETARGET_GENCODE_BASE",
+    "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human",
+)
+
+# Default network timeout, in seconds. Overridable because a slow mirror is
+# not the same thing as a blocked one.
+DOWNLOAD_TIMEOUT = float(os.environ.get("CRETARGET_DOWNLOAD_TIMEOUT", "60"))
+
 # --- Model checkpoints ----------------------------------------------------
 # launch-dCas9 pretrained weights. These are NOT ours and are NOT bundled in
 # the PyPI package; they are redistributed from our Zenodo record with
 # attribution to the original authors (see MODEL_ATTRIBUTION below).
 MODELS_ZENODO_RECORD = "22729308"
 MODELS_DOI = "10.5281/zenodo.22729308"
-MODELS_BASE_URL = f"https://zenodo.org/records/{MODELS_ZENODO_RECORD}/files"
+MODELS_BASE_URL = f"{ZENODO_BASE}/{MODELS_ZENODO_RECORD}/files"
 
 MODEL_FILES = {
     "ckpt-seq-enhancerFitness.pth":
@@ -54,7 +71,7 @@ addition to creTarget.\
 # --- ATAC-seq peaks -------------------------------------------------------
 ATAC_ZENODO_RECORD = "21268805"
 ATAC_DOI = "10.5281/zenodo.21268805"
-ATAC_BASE_URL = f"https://zenodo.org/records/{ATAC_ZENODO_RECORD}/files"
+ATAC_BASE_URL = f"{ZENODO_BASE}/{ATAC_ZENODO_RECORD}/files"
 
 ATAC_CELL_TYPES = [
     "b_cell", "basophil", "cd34_bone_marrow", "cd34_cord_blood", "cd4_tcell",
@@ -65,7 +82,7 @@ ATAC_CELL_TYPES = [
 # --- Reference genome + FlashFry index ------------------------------------
 REFERENCE_ZENODO_RECORD = "21115562"
 REFERENCE_DOI = "10.5281/zenodo.21115562"
-REFERENCE_BASE_URL = f"https://zenodo.org/records/{REFERENCE_ZENODO_RECORD}/files"
+REFERENCE_BASE_URL = f"{ZENODO_BASE}/{REFERENCE_ZENODO_RECORD}/files"
 
 
 class MissingAssetError(SystemExit):
@@ -94,26 +111,97 @@ def sha256_of(path: Path, chunk_bytes: int = 1 << 20) -> str:
     return digest.hexdigest()
 
 
-def _download(url: str, dest: Path, description: str = "") -> None:
+def _download(url: str, dest: Path, description: str = "",
+              timeout: float | None = None, retries: int = 3) -> None:
     """Downloads to a .part file then renames, so an interrupted transfer
-    never leaves something that looks like a complete, valid asset."""
+    never leaves something that looks like a complete, valid asset.
+
+    Three things here are about clusters rather than correctness:
+
+    * A TIMEOUT. urlopen() without one blocks forever, and a firewall that
+      DROPs rather than REJECTs -- the normal configuration on a compute node
+      -- then hangs the command indefinitely with no output. The job burns its
+      walltime and the user has nothing to go on.
+    * RESUME. These are multi-GB files. A connection dropped at 2.9 GB of 3.2
+      used to restart from zero, so on a flaky link the download might never
+      finish. The .part file is kept on failure and continued with a Range
+      request (Zenodo advertises Accept-Ranges: bytes).
+    * A WIDER except. Only urlopen() itself raises URLError; failures *during*
+      the transfer do not. IncompleteRead (the classic truncated large
+      download), ConnectionResetError, and "No space left on device" all used
+      to escape as raw tracebacks.
+    """
+    timeout = DOWNLOAD_TIMEOUT if timeout is None else timeout
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
     label = description or dest.name
     print(f"  -> downloading {label}", file=sys.stderr)
+
+    last_exc = None
+    for attempt in range(1, retries + 1):
+        have = tmp.stat().st_size if tmp.exists() else 0
+        request = urllib.request.Request(url)
+        if have:
+            request.add_header("Range", f"bytes={have}-")
+            print(f"     resuming at {have / 1024**2:.0f} MB "
+                  f"(attempt {attempt}/{retries})", file=sys.stderr)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                # 206 means the server honoured the Range request; anything
+                # else restarts the file, so do not append to a stale .part.
+                resuming = have and getattr(response, "status", None) == 206
+                with open(tmp, "ab" if resuming else "wb") as out:
+                    shutil.copyfileobj(response, out)
+            tmp.replace(dest)
+            return
+        except (urllib.error.URLError, http.client.HTTPException,
+                socket.timeout, OSError) as exc:
+            last_exc = exc
+            if isinstance(exc, OSError) and not isinstance(
+                    exc, (urllib.error.URLError, ConnectionError, socket.timeout)):
+                # A local filesystem error (out of space, read-only) will not
+                # be fixed by retrying.
+                break
+
+    hint = (
+        f"If this machine has no outbound network access (common on cluster\n"
+        f"compute nodes), run this command from a login node, or set\n"
+        f"http_proxy/https_proxy, or download the file manually to {dest}.\n"
+        f"Behind a TLS-inspecting proxy, point SSL_CERT_FILE at your CA bundle.\n"
+        f"To use a mirror: CRETARGET_ZENODO_BASE / CRETARGET_GENCODE_BASE."
+    )
+    kept = (f"  a partial file was kept at {tmp} -- re-run to resume\n"
+            if tmp.exists() and tmp.stat().st_size else "")
+    raise SystemExit(
+        f"ERROR: could not download {label}: {last_exc}\n"
+        f"  URL: {url}\n"
+        f"{kept}{hint}"
+    ) from last_exc
+
+
+def _require_free_space(path: Path, needed_gb: float, what: str) -> None:
+    """Fails before a multi-GB download rather than partway through it.
+
+    HPC home directories are routinely quota-bound at 10-50 GB, and running
+    out mid-extraction leaves a half-populated cache that later looks like a
+    corrupt download.
+    """
     try:
-        with urllib.request.urlopen(url) as response, open(tmp, "wb") as out:
-            shutil.copyfileobj(response, out)
-    except urllib.error.URLError as exc:
-        tmp.unlink(missing_ok=True)
+        free = shutil.disk_usage(path).free
+    except OSError:
+        return  # cannot tell; let the download proceed
+    if free < needed_gb * 1024 ** 3:
         raise SystemExit(
-            f"ERROR: could not download {label}: {exc}\n"
-            f"  URL: {url}\n"
-            f"If this machine has no outbound network access (common on cluster\n"
-            f"compute nodes), run this command from a login node or download the\n"
-            f"file manually and place it in the cache directory."
-        ) from exc
-    tmp.replace(dest)
+            f"ERROR: {path} has {free / 1024**3:.1f} GB free; {what} needs about "
+            f"{needed_gb:.0f} GB while unpacking.\n"
+            f"Point the cache at somewhere larger, e.g.:\n"
+            f"    export CRETARGET_CACHE_DIR=/scratch/$USER/.cretarget\n"
+            f"(or `cretarget configure --set cache.dir=...`), then re-run."
+        )
+
+
+def _looks_like_sha256(text: str) -> bool:
+    return len(text) == 64 and all(c in "0123456789abcdefABCDEF" for c in text)
 
 
 def _verify(path: Path, expected_sha256: str, label: str) -> None:
@@ -186,9 +274,22 @@ def _atac_checksums(dest: Path, force: bool = False) -> dict:
                   "checksums.sha256")
     checksums = {}
     for line in sha_path.read_text().splitlines():
-        parts = line.split()
-        if len(parts) == 2:
-            checksums[parts[1]] = parts[0]
+        parts = line.split(None, 1)
+        # `sha256sum -b` writes "<hash> *<name>"; strip the binary marker, and
+        # require the hash to look like one so an HTML error page cannot parse
+        # as a checksum list.
+        if len(parts) == 2 and _looks_like_sha256(parts[0]):
+            checksums[parts[1].strip().lstrip("*")] = parts[0].lower()
+    if not checksums:
+        snippet = sha_path.read_text()[:120].replace("\n", " ")
+        sha_path.unlink(missing_ok=True)
+        raise SystemExit(
+            f"ERROR: {sha_path.name} is not a valid sha256 list.\n"
+            f"  got: {snippet!r}\n"
+            f"A proxy or captive portal may have returned an error page "
+            f"instead of the file. The bad copy has been removed; re-run to "
+            f"try again."
+        )
     return checksums
 
 
@@ -213,12 +314,18 @@ def fetch_atac(cell_type: str, dest: Path | None = None, force: bool = False,
           file=sys.stderr)
     _download(f"{ATAC_BASE_URL}/{filename}?download=1", target, filename)
 
-    expected = checksums.get(filename)
-    if expected:
-        _verify(target, expected, filename)
-    else:
-        print(f"WARNING: no checksum listed for {filename}, skipping verification",
-              file=sys.stderr)
+    # A missing checksum is fatal rather than a warning. Skipping verification
+    # is how a proxy's HTML login page ends up installed as a .narrowPeak and
+    # only fails much later, inside pandas, with an unrelated message.
+    if filename not in checksums:
+        target.unlink(missing_ok=True)
+        raise SystemExit(
+            f"ERROR: {filename} is not listed in checksums.sha256, so the "
+            f"download cannot be verified.\n"
+            f"Listed files: {', '.join(sorted(checksums)) or '(none)'}\n"
+            f"Re-run with --force to refresh the checksum list."
+        )
+    _verify(target, checksums[filename], filename)
     return target
 
 
@@ -245,7 +352,14 @@ def setup_reference(dest: Path | None = None, force: bool = False,
 
     print(f"=== hg38 + FlashFry index (Zenodo {REFERENCE_DOI}) -> {dest} ===",
           file=sys.stderr)
-    print("    ~3.2GB download; this takes a while.", file=sys.stderr)
+    # The download is ~3.2 GB but the PEAK on-disk footprint is far larger:
+    # both archives, plus the decompressed FASTA, plus the extracted index.
+    # Saying "3.2GB" is how someone with a 10 GB home quota gets a confusing
+    # ENOSPC halfway through and a half-populated cache.
+    print("    ~3.2 GB to download, but ~12 GB of free space is needed while",
+          file=sys.stderr)
+    print("    unpacking. This takes a while.", file=sys.stderr)
+    _require_free_space(dest, needed_gb=12, what="setup-reference")
 
     pairs = [
         ("hg38.fa.gz", "hg38.fa.gz.sha256"),
@@ -255,7 +369,15 @@ def setup_reference(dest: Path | None = None, force: bool = False,
         sha_path = dest / sha_file
         if not sha_path.exists() or force:
             _download(f"{REFERENCE_BASE_URL}/{sha_file}?download=1", sha_path, sha_file)
-        expected = sha_path.read_text().split()[0]
+        fields = sha_path.read_text().split()
+        if not fields or not _looks_like_sha256(fields[0]):
+            sha_path.unlink(missing_ok=True)
+            raise SystemExit(
+                f"ERROR: {sha_file} does not contain a sha256 digest "
+                f"(got {sha_path.name!r} -> {' '.join(fields)[:80]!r}).\n"
+                f"The bad copy has been removed; re-run to fetch it again."
+            )
+        expected = fields[0].lower()
 
         target = dest / payload
         if target.exists() and not force:
@@ -270,9 +392,23 @@ def setup_reference(dest: Path | None = None, force: bool = False,
     if not fasta.exists() or force:
         # Decompressed to plain text deliberately: some bedtools builds
         # mishandle bgzipped FASTA input.
+        #
+        # Done with Python's gzip rather than the bgzip binary. bgzip was an
+        # undeclared dependency -- absent from environment.yml, from the
+        # Dockerfile's smoke test, and from `doctor` -- so `doctor` reported a
+        # healthy environment and setup-reference then died here. It is only
+        # present by accident, via htslib pulled in by bioconda's samtools,
+        # and `module load samtools` or a distro package need not provide it.
+        # bgzip files are valid gzip, so the stdlib reads them.
         print("  -> decompressing hg38.fa.gz", file=sys.stderr)
-        _require_tool("bgzip", "htslib")
-        subprocess.run(["bgzip", "-d", "-k", "-f", str(dest / "hg38.fa.gz")], check=True)
+        tmp_fa = fasta.with_suffix(".fa.part")
+        try:
+            with gzip.open(dest / "hg38.fa.gz", "rb") as src, open(tmp_fa, "wb") as out:
+                shutil.copyfileobj(src, out, length=1 << 22)
+        except OSError as exc:
+            tmp_fa.unlink(missing_ok=True)
+            raise SystemExit(f"ERROR: could not decompress hg38.fa.gz: {exc}") from exc
+        tmp_fa.replace(fasta)
 
     if not (dest / "hg38.fa.fai").exists() or force:
         print("  -> building .fai index (samtools faidx)", file=sys.stderr)
@@ -309,12 +445,23 @@ def _safe_extract(tar: tarfile.TarFile, dest: Path) -> None:
     dest = dest.resolve()
     for member in tar.getmembers():
         target = (dest / member.name).resolve()
-        if not str(target).startswith(str(dest)):
+        # is_relative_to compares path components. The old startswith() was a
+        # string test, so a dest of /cache/ref also accepted /cache/reference2.
+        if not target.is_relative_to(dest):
             raise SystemExit(
                 f"ERROR: refusing to extract {member.name!r} -- it would write "
                 f"outside {dest}"
             )
-    tar.extractall(dest)
+        if member.issym() or member.islnk():
+            raise SystemExit(
+                f"ERROR: refusing to extract link member {member.name!r}"
+            )
+    if sys.version_info >= (3, 12):
+        # Silences the 3.12/3.13 DeprecationWarning and pins the behaviour
+        # that became the default in 3.14.
+        tar.extractall(dest, filter="data")
+    else:
+        tar.extractall(dest)
 
 
 # --------------------------------------------------------------------------
@@ -345,8 +492,8 @@ GENCODE_RELEASE = "47"
 
 def gencode_gtf_url(release: str = None) -> str:
     release = str(release or GENCODE_RELEASE).lstrip("vV")
-    return (f"https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/"
-            f"release_{release}/gencode.v{release}.annotation.gtf.gz")
+    return (f"{GENCODE_BASE}/release_{release}/"
+            f"gencode.v{release}.annotation.gtf.gz")
 
 SEED_REFERENCE_ATTRIBUTION = """\
 The promoter-proximal seed screen implements the method of Hartman et al. 2026,
