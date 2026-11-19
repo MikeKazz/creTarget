@@ -445,6 +445,56 @@ jobs:
           fi
           echo "OK: output is reproducible across runs"
 
+      - name: Verify chunking does not change any guide's score or rank
+        # The invariant the README claims: splitFasta never divides a FASTA
+        # record and prep-regions emits one record per region, so every guide
+        # for a region lands in the same chunk and per-chunk ranking equals
+        # global ranking. Row ORDER follows chunk order, so the comparison is
+        # made after sorting -- comparing bytes would test something the
+        # pipeline does not promise.
+        run: |
+          nextflow run . -profile test,local -w work_chunk \
+            --snp_bed ci_snps.txt \
+            --enhancer_bed ci_enh.txt \
+            --fasta ci_ref/mini.fa \
+            --flashfry_jar FlashFry.jar \
+            --flashfry_db ci_ref/mini_cas9ngg_db \
+            --atac_narrowpeak ci_atac.narrowPeak \
+            --dedup_blast_radius \
+            --chunk_size 1000 \
+            --outdir results_whole
+          python - <<'EOF'
+          import sys
+          import pandas as pd
+
+          key = ["region_id", "genome_start", "genome_end", "orientation"]
+          chunked = pd.read_csv("results_ci/guides.ranked.tsv", sep="\t")
+          whole = pd.read_csv("results_whole/guides.ranked.tsv", sep="\t")
+
+          if len(chunked) != len(whole):
+              sys.exit(f"FAILED: {len(chunked)} guides chunked vs {len(whole)} whole")
+
+          a = chunked.sort_values(key).reset_index(drop=True)
+          b = whole.sort_values(key).reset_index(drop=True)
+          problems = []
+          for column in ("rank", "composite_score", "passes_hard_filters"):
+              # NaN-safe: two missing values are equal for this purpose, and
+              # pandas 3 keeps NA through astype(str) rather than making it
+              # the string "nan", so a naive comparison reports every
+              # hard-filtered guide as differing.
+              equal = (a[column] == b[column]) | (a[column].isna() & b[column].isna())
+              differing = int((~equal).sum())
+              if differing:
+                  problems.append(f"{column} differs for {differing} guide(s)")
+          if problems:
+              print("FAILED:")
+              for problem in problems:
+                  print(" -", problem)
+              sys.exit(1)
+          print(f"OK: {len(a)} guides identical in rank and score at "
+                f"chunk_size 2 and 1000")
+          EOF
+
       - name: Verify -resume caches every task
         run: |
           nextflow run . -profile test,local -resume \

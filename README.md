@@ -326,10 +326,15 @@ under a single orientation, which silently halves recall while exiting 0.
 8. **Seed screening** *(optional)* — promoter-proximal seed matches over the
    collated table, producing `guides.final.tsv`. *(once, not per chunk)*
 
-Ranking is per-`region_id`, and every guide for a region lands in the same
-chunk, so per-chunk ranking is exactly equivalent to ranking globally. This is
-verified in CI: a chunked run produces byte-identical results to an unchunked
-one.
+Ranking is per-`region_id`, and `splitFasta` never divides a FASTA record
+while `prep-regions` emits exactly one record per region — so every guide for
+a region lands in the same chunk, and each guide's `rank` and
+`composite_score` are identical to what a single unchunked run would produce.
+
+Row *order* in the collated table does follow chunk order, so it depends on
+`--chunk_size`; sort by `region_id` if you need a canonical ordering. CI
+verifies that two runs with identical parameters are byte-identical, and that
+runs at different `--chunk_size` agree row-for-row once sorted.
 
 ## Step-level CLI
 
