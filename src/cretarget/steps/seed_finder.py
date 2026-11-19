@@ -222,7 +222,17 @@ def iter_guides(ranked_path, passing_only=True, id_prefix=None):
                         else None)
         chrom_index = (header.index(LOCUS_COLUMN)
                        if LOCUS_COLUMN in header else None)
+        width = max(idx.values())
         for index, row in enumerate(reader):
+            # csv.reader yields [] for a blank line, and a truncated row for a
+            # table whose writer was killed mid-line. Both used to raise
+            # IndexError below -- after the promoterome scan had already run,
+            # which on a genome-wide table is hours in.
+            if len(row) <= width:
+                if row:
+                    print(f"WARNING: skipping short row {index + 2} of "
+                          f"{ranked_path} ({len(row)} fields)", file=sys.stderr)
+                continue
             if not _is_screened(row, filter_index):
                 continue
             locus = None
@@ -256,7 +266,11 @@ def write_annotated(ranked_path, out_path, summary, passing_only=True,
                         else None)
 
         dst.write("\t".join(header + SUMMARY_COLUMNS) + "\n")
+        width = max(idx.values())
         for index, row in enumerate(reader):
+            # Mirrors the skip in iter_guides, so the two passes stay in step.
+            if len(row) <= width:
+                continue
             guide_id = build_guide_id(
                 row[idx["region_id"]], row[idx["genome_start"]],
                 row[idx["genome_end"]],

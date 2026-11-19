@@ -47,6 +47,29 @@ def cmd_rank(args):
     rank_step.run(args)
 
 
+def _python_with_torch():
+    """creTarget's own interpreter, but only if it can actually run the model.
+
+    launch-dCas9 needs torch, which creTarget deliberately does not depend on.
+    Falling back to sys.executable unconditionally guaranteed a confusing
+    `ModuleNotFoundError: No module named 'torch'` from a subprocess -- and
+    inside the container that can never be satisfied. Say what is wrong and
+    which setting fixes it instead.
+    """
+    import importlib.util
+
+    if importlib.util.find_spec("torch") is not None:
+        return sys.executable
+    raise SystemExit(
+        "ERROR: --run_launch_dcas9 needs a Python with torch installed, and "
+        "creTarget's own interpreter does not have it.\n"
+        f"  (checked: {sys.executable})\n"
+        "Point at the launch-dCas9 environment's interpreter:\n"
+        "    --launch_python /path/to/torch-env/bin/python\n"
+        "or:  cretarget configure --set launch_dcas9.python_bin=/path/to/python"
+    )
+
+
 def cmd_score_launch_dcas9(args):
     config = cfg.load_config()
     args.launch_script = (
@@ -56,7 +79,7 @@ def cmd_score_launch_dcas9(args):
     args.python_bin = (
         cfg.expand(args.python_bin)
         or cfg.get_path(config, "launch_dcas9", "python_bin")
-        or sys.executable
+        or _python_with_torch()
     )
     ckpt_dir = cfg.expand(args.ckpt_dir) or cfg.get_path(config, "launch_dcas9", "ckpt_dir")
     # require_models never downloads -- this may be running on a compute node

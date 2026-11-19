@@ -39,6 +39,17 @@ METADATA_COLUMNS = [
 ]
 
 
+def _tool_version(name: str) -> str:
+    """Best-effort version string, for error messages only."""
+    try:
+        proc = subprocess.run([name, "--version"], capture_output=True,
+                              text=True, timeout=20, errors="replace")
+        line = (proc.stdout or proc.stderr).strip().splitlines()
+        return line[0].strip() if line else "unknown"
+    except Exception:
+        return "unknown"
+
+
 def _int(value: str) -> int:
     """Coordinates copy-pasted from genome browsers often carry thousands
     separators (chr1:1,000,000-1,000,500)."""
@@ -299,11 +310,25 @@ def run(args):
 
     fasta_out = outdir / "regions.fasta"
     raw_fasta = outdir / "regions.raw.fasta"
-    subprocess.run(
+
+    # stderr is captured and reported. With check=True alone, a different
+    # site's bedtools rejecting a flag, or a FASTA whose contig names do not
+    # match the BED, surfaced only as "returned non-zero exit status 1" with
+    # bedtools' actual explanation discarded.
+    result = subprocess.run(
         ["bedtools", "getfasta", "-fi", fasta, "-bed", str(padded_bed),
          "-name", "-fo", str(raw_fasta)],
-        check=True,
+        capture_output=True, text=True,
     )
+    if result.returncode != 0:
+        raise SystemExit(
+            f"ERROR: `bedtools getfasta` failed (exit {result.returncode}).\n"
+            f"  FASTA: {fasta}\n"
+            f"  BED:   {padded_bed}\n"
+            f"{(result.stderr or '').strip()}\n"
+            f"A common cause is contig naming: the FASTA must use the same "
+            f"names as your targets (e.g. 'chr1' vs '1')."
+        )
 
     # bedtools >=2.27 writes "name::chrom:start-end" for -name; older builds
     # write just "name". Splitting on "::" handles both.
@@ -311,7 +336,17 @@ def run(args):
         for line in src:
             if line.startswith(">"):
                 region_id = line[1:].strip().split("::")[0]
-                dst.write(f">{header_by_name[region_id]}\n")
+                header = header_by_name.get(region_id)
+                if header is None:
+                    raise SystemExit(
+                        f"ERROR: bedtools returned a FASTA header this step "
+                        f"does not recognise: {line.strip()!r}\n"
+                        f"Parsed region id: {region_id!r}\n"
+                        f"This usually means an unexpected `getfasta -name` "
+                        f"header format. bedtools version: "
+                        f"{_tool_version('bedtools')}"
+                    )
+                dst.write(f">{header}\n")
             else:
                 dst.write(line)
     raw_fasta.unlink(missing_ok=True)
