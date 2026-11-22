@@ -70,6 +70,11 @@ REQUIRED_COLUMNS = ("spacer", "region_id", "genome_start", "genome_end")
 # is reported as a potential off-target.
 LOCUS_COLUMN = "chrom"
 
+# Above this fraction of screened guides with unreadable coordinates, the
+# screen refuses to emit results rather than publishing inflated off-target
+# counts. Mirrors the >1% ceiling used for the metadata join in annotate.py.
+UNPARSEABLE_LOCUS_FATAL_FRACTION = 0.01
+
 # csv's default field limit is 128 KB. Nothing here should approach it, but a
 # malformed line should not abort a long run with an opaque error.
 csv.field_size_limit(10 * 1024 * 1024)
@@ -229,6 +234,7 @@ def iter_guides(ranked_path, passing_only=True, id_prefix=None):
                   file=sys.stderr)
         width = max(idx.values())
         unparseable_loci = 0
+        screened_rows = 0
         for index, row in enumerate(reader):
             # csv.reader yields [] for a blank line, and a truncated row for a
             # table whose writer was killed mid-line. Both used to raise
@@ -244,32 +250,61 @@ def iter_guides(ranked_path, passing_only=True, id_prefix=None):
             locus = None
             if chrom_index is not None:
                 try:
+                    # int(float(x)) so "119869.0" parses. A table written by
+                    # an older creTarget has float coordinates, and refusing
+                    # to read them would disable self-hit detection for the
+                    # whole run -- the exact failure this guard exists to
+                    # catch. Coordinates are integral by construction, so
+                    # the float round-trip is lossless below 2^53.
                     locus = (sys.intern(row[chrom_index]),
-                             int(row[idx["genome_start"]]),
-                             int(row[idx["genome_end"]]))
-                except (ValueError, IndexError):
-                    # Screen anyway, but say so. A locus of None disables
-                    # self-hit detection for that guide, and self-hits were
-                    # 73% of all hits in a genome-wide run -- so a silent
-                    # fallback here inflates seedfinder_hit_count several-fold
-                    # while the run exits 0. The usual cause was float
-                    # coordinates ("119869.0") reaching int().
+                             int(float(row[idx["genome_start"]])),
+                             int(float(row[idx["genome_end"]])))
+                except (ValueError, IndexError, TypeError):
                     locus = None
                     unparseable_loci += 1
+                    screened_rows += 1
                     if unparseable_loci == 1:
                         print(f"WARNING: cannot parse genome coordinates for "
                               f"{row[idx['region_id']]!r} "
                               f"({row[idx['genome_start']]!r}, "
-                              f"{row[idx['genome_end']]!r}); self-hit detection "
-                              f"is disabled for affected guides and "
-                              f"seedfinder_hit_count will be overstated.",
+                              f"{row[idx['genome_end']]!r}); self-hit "
+                              f"detection is disabled for affected guides.",
                               file=sys.stderr)
+                else:
+                    screened_rows += 1
             yield build_guide_id(
                 row[idx["region_id"]], row[idx["genome_start"]],
                 row[idx["genome_end"]],
                 row[orientation_index] if orientation_index is not None else "NA",
                 index, id_prefix,
             ), row[idx["spacer"]].strip().upper(), locus
+
+    # Reported as a TOTAL, and fatal above a threshold.
+    #
+    # Warning once on the first bad row was too weak for the highest-severity
+    # failure mode here: a null locus disables self-hit detection, self-hits
+    # were 73% of all hits in a genome-wide run, and seedfinder_hit_count is
+    # overstated accordingly while the run exits 0. On a sharded run that
+    # single warning is one line in one of N .command.err files. This matches
+    # the standard set elsewhere in this release, where >1% unmatched on the
+    # metadata join is fatal.
+    if unparseable_loci:
+        fraction = unparseable_loci / max(screened_rows, 1)
+        message = (f"{unparseable_loci:,} of {screened_rows:,} screened "
+                   f"guide(s) ({fraction:.1%}) in {ranked_path} have "
+                   f"unparseable genome coordinates, so they cannot be "
+                   f"recognised when they find their own target site.")
+        if fraction > UNPARSEABLE_LOCUS_FATAL_FRACTION:
+            raise SystemExit(
+                f"ERROR: {message}\n"
+                f"seedfinder_hit_count would be substantially overstated for "
+                f"them -- self-hits dominate the raw hit count. Refusing to "
+                f"emit a screen whose off-target counts are not trustworthy.\n"
+                f"Check that genome_start/genome_end are integers in the "
+                f"ranked table."
+            )
+        print(f"WARNING: {message} Their seedfinder_hit_count will be "
+              f"overstated.", file=sys.stderr)
 
 
 def write_annotated(ranked_path, out_path, summary, passing_only=True,

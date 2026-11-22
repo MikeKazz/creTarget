@@ -38,16 +38,54 @@ def _tool_version(name, flag="--version"):
             [name, flag], capture_output=True, text=True, timeout=20,
             errors="replace",
         )
-        output = (proc.stdout or proc.stderr).strip().splitlines()
-        first = output[0].strip() if output else "(version unknown)"
-        return proc.returncode == 0, first
+        # Both streams: samtools writes to stdout, java to stderr, and a
+        # banner may land on either independently of the version itself.
+        combined = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+        lines = [l.strip() for l in combined.splitlines() if l.strip()]
+        return proc.returncode == 0, _pick_version_line(name, lines)
     except Exception as exc:
         return False, f"could not execute: {exc}"
 
 
+_VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
+
+
+def _pick_version_line(name, lines):
+    """The line that actually carries the version, not simply the first one.
+
+    Tools rarely print their version on line 1 in a real environment. With
+    JAVA_TOOL_OPTIONS set -- which is exactly what a `module load` does --
+    java prints "Picked up JAVA_TOOL_OPTIONS: ..." first, and nextflow leads
+    with an ASCII logo. Taking line 0 reported those banners as the version,
+    and worse, let a version-shaped number inside a banner (say a module path
+    like bedtools/2.26.0) satisfy or fail a minimum-version check.
+    """
+    def rank(line):
+        low = line.lower()
+        if not _VERSION_RE.search(line):
+            return 4
+        # A path is almost always a module or install location, not the
+        # version the tool reports: "Loading module bedtools/2.26.0" would
+        # otherwise outrank the real "bedtools v2.31.1" below it and fail a
+        # minimum-version check on a perfectly good install.
+        looks_like_path = "/" in line or "\\" in line
+        if name.lower() in low and not looks_like_path:
+            return 0
+        if "version" in low and not looks_like_path:
+            return 1
+        if not looks_like_path:
+            return 2
+        return 3
+
+    if not lines:
+        return "(version unknown)"
+    best = min(range(len(lines)), key=lambda i: (rank(lines[i]), i))
+    return lines[best]
+
+
 def _parse_version(text):
     """First dotted numeric run in a version string, as a tuple of ints."""
-    match = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", text or "")
+    match = _VERSION_RE.search(text or "")
     if not match:
         return None
     return tuple(int(g) for g in match.groups(default="0"))

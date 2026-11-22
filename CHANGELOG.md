@@ -81,10 +81,17 @@ value is now treated as missing rather than credited as safe.
 
 ### Fixed -- portability
 
-- **`--queue` was accepted and then ignored on SLURM.** The profile mixed
-  `process.queue = ...` with a `process { }` block, and the block drops the
-  dotted assignments on Nextflow 24.04 and 25.10. Every task went to the
-  site's default partition, or was rejected where a partition is mandatory.
+- The SLURM profile no longer mixes `process.x = ...` with a `process { }`
+  block; everything process-related is in one block.
+
+  **Correction:** an earlier draft of these notes claimed this fixed `--queue`
+  being silently dropped on Nextflow 24.04/25.10. That claim does not hold up.
+  It came from a minimal reproduction, and the same test against this
+  repository shows both forms resolving `queue` identically on 24.04.4,
+  25.10.3 and 26.10.5. The behaviour also moved with config formatting that
+  should not be semantically relevant, so the original diagnosis was wrong.
+  Treat this as a readability and robustness change, **not** a reason to
+  upgrade. Thanks to the reviewer who checked it rather than taking my word.
 - **Nextflow and Python disagreed about the cache location.** The workflow had
   its own copy of the resolution order that ignored `[cache].dir` in
   `config.toml` and used the JVM's `user.home`, which on Linux comes from the

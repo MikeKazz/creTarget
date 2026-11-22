@@ -17,6 +17,7 @@ from cretarget.steps.prep_regions import (
 from cretarget.steps.rank import (
     FILTER_ORDER, first_fail_reason, minmax_norm, parse_in_genome_count, seed_score,
 )
+from cretarget.doctor import _parse_version, _pick_version_line
 from cretarget.steps.launch_dcas9 import _join_predictions, unique_valid_spacers
 
 
@@ -337,3 +338,41 @@ class TestJoinPredictions:
         result = _join_predictions(preds, [A20, T20], Path("p.csv"), "enhancerFitness")
         assert result == {A20: 0.3, T20: 0.6}
         assert "row order" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# doctor: version detection in the presence of banners
+#
+# Tools rarely print their version on line 1 in a real environment. A
+# `module load` sets JAVA_TOOL_OPTIONS, so java leads with "Picked up ...";
+# nextflow leads with an ASCII logo. Reading line 0 reported the banner as
+# the version, and a version-shaped number inside a module path could
+# satisfy or fail a minimum-version check.
+# --------------------------------------------------------------------------
+
+class TestDoctorVersionDetection:
+    def test_skips_the_java_tool_options_banner(self):
+        picked = _pick_version_line(
+            "java", ["Picked up JAVA_TOOL_OPTIONS: -Xmx2g",
+                     'openjdk version "17.0.21" 2026-10-24'])
+        assert _parse_version(picked) == (17, 0, 21)
+
+    def test_skips_the_nextflow_logo(self):
+        picked = _pick_version_line(
+            "nextflow", ["  N E X T F L O W", "  version 24.04.4 build 5917"])
+        assert _parse_version(picked) == (24, 4, 4)
+
+    def test_a_module_path_does_not_outrank_the_real_version(self):
+        # The damaging case: a 2.31 install failed the >=2.27 floor because
+        # the module banner named 2.26.
+        picked = _pick_version_line(
+            "bedtools", ["Loading module bedtools/2.26.0", "bedtools v2.31.1"])
+        assert _parse_version(picked) == (2, 31, 1)
+        assert _parse_version(picked) >= (2, 27)
+
+    def test_plain_output_is_unchanged(self):
+        assert _pick_version_line("samtools", ["samtools 1.21"]) == "samtools 1.21"
+
+    def test_no_version_anywhere_is_not_a_crash(self):
+        assert _parse_version(_pick_version_line("x", ["nothing here"])) is None
+        assert _pick_version_line("x", []) == "(version unknown)"
