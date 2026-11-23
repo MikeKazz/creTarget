@@ -83,7 +83,6 @@ jobs:
           context: .
           # Pinned, not inherited from the runner. See the header.
           platforms: linux/amd64
-          push: true
           # buildx attaches provenance/SBOM attestations by default, which
           # turns a plain manifest into an OCI index carrying an extra
           # "unknown/unknown" entry. Images through 0.5.1 were plain
@@ -93,6 +92,16 @@ jobs:
           # nobody here consumes.
           provenance: false
           sbom: false
+          # oci-mediatypes=false is NOT cosmetic. buildx defaults to OCI
+          # manifests; `docker push` writes Docker schema2. GHCR serves a
+          # manifest only when its media type appears in the client's Accept
+          # header, and returns 404 -- not 406 -- otherwise. An OCI-only
+          # image is therefore invisible to any client advertising just the
+          # Docker types: older Apptainer/Singularity, older skopeo, some
+          # registry proxies. 0.6.0 and 0.6.1 shipped OCI-only and 404'd for
+          # exactly those clients while the image was demonstrably present.
+          # Every image through 0.5.1 was Docker schema2; match it.
+          outputs: type=registry,oci-mediatypes=false
           tags: |
             ghcr.io/mikekazz/cretarget:${{ steps.ref.outputs.version }}
             ghcr.io/mikekazz/cretarget:latest
@@ -124,6 +133,29 @@ jobs:
             exit 1
           fi
           echo "OK: single linux/amd64 manifest"
+
+          # THE CHECK THAT MATTERS FOR OLDER TOOLING. GHCR returns 404, not
+          # 406, when the stored manifest's media type is absent from the
+          # client's Accept header. That is how 0.6.0 and 0.6.1 shipped
+          # unpullable by older Apptainer while passing a verification step
+          # that happened to send all four media types. Ask the way old
+          # tooling asks, and require 200.
+          REPO=mikekazz/cretarget
+          AUTH=$(curl -fsSL "https://ghcr.io/token?scope=repository:$REPO:pull&service=ghcr.io" \
+                 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+          for TAG in "${{ steps.ref.outputs.version }}" latest; do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer $AUTH" \
+              -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+              "https://ghcr.io/v2/$REPO/manifests/$TAG")
+            echo "  docker-schema2-only Accept, tag $TAG -> HTTP $CODE"
+            if [ "$CODE" != "200" ]; then
+              echo "ERROR: $REPO:$TAG is not retrievable by a client that" >&2
+              echo "       advertises only Docker media types (got $CODE)." >&2
+              exit 1
+            fi
+          done
+          echo "OK: pullable by Docker-schema2-only clients"
 
           GOT=$(docker run --rm "$IMAGE" cretarget --version | tr -d '\r')
           echo "image reports: $GOT"
