@@ -483,7 +483,7 @@ minutes rather than hours.
 creTarget is archived on Zenodo. Cite
 [10.5281/zenodo.24148024](https://doi.org/10.5281/zenodo.24148024) for the software in
 general (this always resolves to the latest release), or
-[10.5281/zenodo.24378489](https://doi.org/10.5281/zenodo.24378489) for v0.6.0
+[10.5281/zenodo.24451292](https://doi.org/10.5281/zenodo.24451292) for v0.6.1
 specifically when exact reproducibility matters.
 
 If you use creTarget, please cite it (see `CITATION.cff`) along with
