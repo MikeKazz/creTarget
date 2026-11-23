@@ -4,6 +4,59 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1]
+
+Fixes from a review of the 0.6.0 release, including a correction to 0.6.0's
+own release notes. No change to any result: guides, ranks and scores are
+identical to 0.6.0.
+
+### Corrected
+
+- **The `--queue` claim in the 0.6.0 notes was wrong and has been retracted.**
+  0.6.0 said the previous SLURM profile shape silently dropped `--queue` on
+  Nextflow 24.04/25.10, sending every task to the default partition. That does
+  not reproduce. It came from a minimal harness; tested against this
+  repository, both the old and new profile forms resolve `queue` identically
+  on 24.04.4, 25.10.3 and 26.10.5, and the behaviour moved with config
+  formatting that is not semantically relevant. The single-block `process { }`
+  form is kept because it is clearer, but it fixes nothing and is **not** a
+  reason to upgrade from 0.5.x.
+
+### Fixed
+
+- **The seed screen's locus guard was weaker than this project's own
+  standard.** It warned once on the first unreadable coordinate, never
+  reported a total and never failed -- on a sharded run, one line in one of N
+  `.command.err` files, guarding the highest-severity failure mode in the
+  pipeline (an unreadable locus disables self-hit detection, and self-hits
+  were ~73% of all hits in a genome-wide run, so `seedfinder_hit_count` is
+  overstated). It now reports the total and fraction, and is **fatal above
+  1%** -- the same ceiling already applied to the metadata join.
+- Coordinates in the ranked table are parsed with `int(float(x))`, so a table
+  written by an older creTarget recovers instead of silently losing self-hit
+  detection for the whole run.
+- **`doctor` read the first line of a tool's output as its version.** With
+  `JAVA_TOOL_OPTIONS` set -- which is what `module load` does -- java leads
+  with `Picked up JAVA_TOOL_OPTIONS:` and nextflow with its ASCII logo, so
+  `doctor` reported the banner. Worse, the minimum-version check added in
+  0.6.0 could read a version out of a banner: `Loading module
+  bedtools/2.26.0` outranked `bedtools v2.31.1` and would have failed the
+  `>=2.27` floor on a healthy install. Version lines are now selected by rank
+  with path-like lines deprioritised, and both output streams are considered.
+- **`manifest.license` removed.** It is only recognised from Nextflow 25, so
+  on the declared floor of 24.04 it emitted `Invalid config manifest
+  attribute` twice on every run. The licence is already declared in `LICENSE`,
+  `pyproject.toml`, `CITATION.cff` and the image label.
+
+### Added
+
+- `.github/workflows/release-image.yml` builds and publishes the container on
+  a `v*` tag, pinned to `linux/amd64` and verified after push (architecture,
+  single manifest, the version the installed package reports, and that
+  bedtools/samtools/java run inside the image). Previously the image was built
+  by hand, where Docker Desktop on Apple Silicon would have published an arm64
+  image that fails on every x86-64 cluster with `exec format error`.
+
 ## [0.6.0]
 
 A portability and correctness release. Nothing here changes the method; the

@@ -64,7 +64,7 @@ optional `--run_launch_dcas9` step.
 creTarget is not on PyPI or bioconda yet. Install it from a release tarball:
 
 ```bash
-pip install https://github.com/MikeKazz/creTarget/archive/refs/tags/v0.6.0.tar.gz
+pip install https://github.com/MikeKazz/creTarget/archive/refs/tags/v0.6.1.tar.gz
 ```
 
 Or build the full environment with conda, which also brings `bedtools`,
@@ -394,10 +394,10 @@ software.
 solve, no version skew between users:
 
 ```bash
-nextflow run MikeKazz/creTarget -r v0.6.0 -profile slurm,singularity ...
+nextflow run MikeKazz/creTarget -r v0.6.1 -profile slurm,singularity ...
 ```
 
-It defaults to `ghcr.io/mikekazz/cretarget:0.6.0`; override with
+It defaults to `ghcr.io/mikekazz/cretarget:0.6.1`; override with
 `--container_image`. The `conda` profile builds the same pinned environment
 from `assets/environment.yml` instead; if conda's solver is slow, use
 `-profile micromamba` (same environment, a solver that handles it in seconds).
